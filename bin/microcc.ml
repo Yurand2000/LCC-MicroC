@@ -1,10 +1,28 @@
 open Microc
 
-type action = Parse | Type_check | Dump_llvm_ir | Compile
+type action = Scan | Parse | Type_check | Dump_llvm_ir | Compile
 
 let[@inline] ( >> ) f g x = g (f x)
 
 let action_function outputfile optimize verify_module = function
+  | Scan ->
+      let scan buffer =
+        let rec scan_tr buffer acc =
+            match Scanner.next_token buffer with
+            | Microc.ScannerTokens.EOF -> Microc.ScannerTokens.EOF :: acc
+            | token -> scan_tr buffer (token :: acc)
+        in
+        List.rev (scan_tr buffer [])
+      in
+      let print_tokens tokens =
+        let print_token acc token =
+          acc ^ "\n" ^ (Microc.ScannerTokens.show_token token)
+        in
+        List.fold_left print_token "" tokens;
+      in
+      scan
+      >> print_tokens
+      >> Printf.printf "Scanning succeded!\n\n%s\n"
   | Parse ->
       Parsing.parse Scanner.next_token
       >> Ast.show_program
@@ -86,6 +104,8 @@ let () =
     let verify = ref false in
     let spec_list =
       [
+        ("-s", 
+          Arg.Unit (fun () -> action := Scan), "Scan and print tokens");
         ("-p", 
           Arg.Unit (fun () -> action := Parse), "Parse and print AST");
         ( "-t",
