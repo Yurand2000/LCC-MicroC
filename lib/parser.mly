@@ -30,7 +30,7 @@
 %token NULL TINT TCHAR TVOID TBOOL
 
 /* Operators */
-%token ADDR_OF ASSIGN
+%token BIT_AND ASSIGN
 %token PLUS MINUS TIMES "*" DIV MOD
 %token EQ NEQ LEQ LS GR GEQ
 %token AND OR NOT
@@ -58,7 +58,7 @@
 %left GR GEQ LS LEQ
 %left PLUS MINUS
 %left TIMES DIV MOD
-%right NOT ADDR_OF DEFER UPLUS UMINUS
+%right NOT BIT_AND DEFER UPLUS UMINUS
 %left LSQR_BRACKET /*LPAREN*/
 
 /* ------------------------------------------ */
@@ -278,4 +278,4 @@ let aexpr :=
 | bval = BOOL; { annotate (BLiteral bval) $startpos $endpos }
 | NULL; { annotate (ILiteral 0) $startpos $endpos }
 | LPAREN; e = rexpr; RPAREN; { e }
-| ADDR_OF; e = lexpr; { annotate (Addr e) $startpos $endpos }
+| BIT_AND; e = lexpr; { annotate (Addr e) $startpos $endpos }

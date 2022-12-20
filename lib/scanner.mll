@@ -5,22 +5,60 @@
 
     (* Auxiliary definitions *)
     exception Lexing_error of Location.lexeme_pos * string
-
 }
 
-(* Regular Expressions *)
+(* Generic Regular Expressions *)
 let letters = ['a'-'z'] | ['A' - 'Z']
-let digits = ['0'-'9']
+let zero = '0'
+let octal_digits = ['0'-'7']
+let octal_digits_non_zero = ['1'-'7']
+let digits = octal_digits | ['8'-'9']
+let digits_non_zero = octal_digits_non_zero | ['8'-'9']
 let hex_digits = digits | ['a' - 'f'] | ['A' - 'F']
+let hex_digits_non_zero = digits_non_zero | ['a' - 'f'] | ['A' - 'F']
 let special_chars = "\\'" | "\\b" | "\\f" | "\\t" | "\\\\" | "\\r" | "\\n"
 let chars = [^ '\'' '\b' '\t' '\\' '\r' '\n' ]
 let whitespace = ' ' | '\t' | '\n' | '\r'
 
+(* Identifier Regular Expression *)
 let ident = ('_' | letters )('_' | letters | digits)*
-let integer = digits+ | ("0x" | "0X") hex_digits+
+let sign = '+' | '-'
+let octal_number_prefix = zero
+let hex_number_prefix = ("0x" | "0X")
+
+(* Integer Regular Expression *)
+let octal_integer = octal_digits_non_zero octal_digits* | zero
+let decimal_integer = digits_non_zero digits* | zero
+let hex_integer = hex_digits_non_zero hex_digits* | zero
+let integer =
+      decimal_integer
+    | octal_number_prefix octal_integer
+    | hex_number_prefix hex_integer
+
+(* Float Regular Expression *)
+let decimal_significand =
+      decimal_integer
+    | (decimal_integer '.' digits*)
+    | ('.' digits+)
+
+let hex_significand =
+    | hex_integer
+    | (hex_integer '.' hex_digits*)
+    | ('.' hex_digits+)
+
+let significand =
+      decimal_significand
+    | hex_number_prefix hex_significand
+
+let exponent =
+      ( 'e' | 'E' ) sign? decimal_integer
+    | ( 'p' | 'P' ) sign? hex_integer
+
+let float = significand exponent? ('f' | 'F')
+
+(* Other Types *)
 let char = '\'' chars '\''
 let bool = "true" | "false"
-let operators = '&' | '+' | '-' | '*' | '/' | '%' | '=' | "==" | "!=" | "<=" | '<' | '>' | ">=" | "&&" | "||" | '!'
 
 (* Scanner specification *)
 rule next_token = parse
@@ -32,23 +70,29 @@ rule next_token = parse
     | "else" { ELSE }
     | "for" { FOR }
     | "while" { WHILE }
+    | "do" { DO }
 
     | "int" { TINT }
+    | "float" { TFLOAT }
     | "char" { TCHAR }
     | "void" { TVOID }
     | "bool" { TBOOL }
 
     | "return" { RETURN }
     | "NULL" { NULL }
+    | "struct" { STRUCT }
+    | "sizeof" { SIZEOF }
 
     (* Operators *)
-    | '&' { ADDR_OF }
+    | '=' { ASSIGN }
     | '+' { PLUS }
     | '-' { MINUS }
     | '*' { TIMES }
     | '/' { DIV }
     | '%' { MOD }
-    | '=' { ASSIGN }
+    | "++" { INCREMENT }
+    | "--" { DECREMENT }
+
     | "==" { EQ }
     | "!=" { NEQ }
     | "<=" { LEQ }
@@ -59,13 +103,34 @@ rule next_token = parse
     | "||" { OR }
     | '!' { NOT }
 
+    | '&' { BIT_AND }
+    | '|' { BIT_OR }
+    | '~' { BIT_NOT }
+    | '^' { BIT_XOR }
+    | "<<" { SHIFT_LEFT }
+    | ">>" { SHIFT_RIGHT }
+
+    | "+=" { ASSING_PLUS }
+    | "-=" { ASSING_MINUS }
+    | "*=" { ASSING_TIMES }
+    | "/=" { ASSING_DIV }
+    | "%=" { ASSING_MOD }
+    | "&=" { ASSING_BIT_AND }
+    | "|=" { ASSING_BIT_OR }
+    | "^=" { ASSING_BIT_XOR }
+    | "<<=" { ASSING_SHIFT_LEFT }
+    | ">>=" { ASSING_SHIFT_RIGHT }
+
     (* Identifiers and Values *)
     | ident as str { IDENT str }
     | integer as str 
         {
             INT (int_of_string str)
         }
-
+    | float as str 
+        {
+            FLOAT (float_of_string float)
+        }
     | '\'' chars as str '\''
         {
             let pos = to_lexeme_position lexbuf in
@@ -83,10 +148,14 @@ rule next_token = parse
     | '\'' "\r" '\'' { CHAR '\r' }
     | '\'' "\n" '\'' { CHAR '\n' }
     
-    | bool as str { BOOL (equal str "true") }
+    | "true" { BOOL (true) }
+    | "false" { BOOL (false) }
         
     (* Other Symbols *)
     | ';' { SEMICOLON }
+    | ',' { COMMA }
+    | '.' { DOT }
+    | "->" { ARROW }
     | '(' { LPAREN }
     | ')' { RPAREN }
     | '[' { LSQR_BRACKET }

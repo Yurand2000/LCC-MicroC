@@ -1,20 +1,19 @@
 type binop =
-  | Add
-  | Sub
-  | Mult
-  | Div
-  | Mod
-  | Equal
-  | Neq
-  | Less
-  | Leq
-  | Greater
-  | Geq
-  | And
-  | Or
+  | Add | Sub | Mult | Div | Mod
+  | Bit_And | Bit_Or | Bit_Xor
+  | Shift_Left | Shift_Right
+  | Equal | Neq
+  | Less | Leq
+  | Greater | Geq
+  | And | Or
 [@@deriving show]
 
-type uop = Neg | Not [@@deriving show]
+type uop =
+  | Pos | Neg
+  | Bit_Not | Not
+  | Pre_Incr | Pre_Decr
+  | Post_Incr | Post_Decr
+[@@deriving show]
 type identifier = string [@@deriving show]
 
 type 'a annotated_node = {
@@ -25,6 +24,7 @@ type 'a annotated_node = {
 
 type typ =
   | TypI (* Type int *)
+  | TypF (* Type float *)
   | TypB (* Type bool *)
   | TypC (* Type char *)
   | TypA of typ * int option (* Array type *)
@@ -39,11 +39,13 @@ and expr_node =
   | Assign of access * expr (* x=e  or  *p=e  or  a[e]=e   *)
   | Addr of access (* &x   or  &*p   or  &a[e]  *)
   | ILiteral of int (* Integer literal  *)
+  | FLiteral of float (* Float literal  *)
   | CLiteral of char (* Char literal    *)
   | BLiteral of bool (* Bool literal    *)
   | UnaryOp of uop * expr (* Unary primitive operator  *)
   | BinaryOp of binop * expr * expr (* Binary primitive operator  *)
   | Call of identifier * expr list (* Function call f(...)    *)
+  | SizeOf of typ
 [@@deriving show]
 
 and access = access_node annotated_node
@@ -52,6 +54,8 @@ and access_node =
   | AccVar of identifier (* Variable access    x  *)
   | AccDeref of expr (* Pointer dereferencing  *p *)
   | AccIndex of access * expr (* Array indexing   a[e] *)
+  | AccDot of access * identifier (* Struct Dot access a.b *)
+  | AccArrow of expr * identifier (* Struct Arrow access p->b *)
 [@@deriving show]
 
 and stmt = stmt_node annotated_node
