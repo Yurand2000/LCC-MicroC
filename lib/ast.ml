@@ -29,6 +29,7 @@ type typ =
   | TypC (* Type char *)
   | TypA of typ * int option (* Array type *)
   | TypP of typ (* Pointer type  *)
+  | TypS of typ list (* Struct type *)
   | TypV (* Type void  *)
 [@@deriving show]
 

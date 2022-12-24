@@ -42,7 +42,7 @@ let decimal_significand =
     | ('.' digits+)
 
 let hex_significand =
-    | hex_integer
+      hex_integer
     | (hex_integer '.' hex_digits*)
     | ('.' hex_digits+)
 
@@ -110,16 +110,16 @@ rule next_token = parse
     | "<<" { SHIFT_LEFT }
     | ">>" { SHIFT_RIGHT }
 
-    | "+=" { ASSING_PLUS }
-    | "-=" { ASSING_MINUS }
-    | "*=" { ASSING_TIMES }
-    | "/=" { ASSING_DIV }
-    | "%=" { ASSING_MOD }
-    | "&=" { ASSING_BIT_AND }
-    | "|=" { ASSING_BIT_OR }
-    | "^=" { ASSING_BIT_XOR }
-    | "<<=" { ASSING_SHIFT_LEFT }
-    | ">>=" { ASSING_SHIFT_RIGHT }
+    | "+=" { ASSIGN_PLUS }
+    | "-=" { ASSIGN_MINUS }
+    | "*=" { ASSIGN_TIMES }
+    | "/=" { ASSIGN_DIV }
+    | "%=" { ASSIGN_MOD }
+    | "&=" { ASSIGN_BIT_AND }
+    | "|=" { ASSIGN_BIT_OR }
+    | "^=" { ASSIGN_BIT_XOR }
+    | "<<=" { ASSIGN_SHIFT_LEFT }
+    | ">>=" { ASSIGN_SHIFT_RIGHT }
 
     (* Identifiers and Values *)
     | ident as str { IDENT str }
@@ -129,7 +129,7 @@ rule next_token = parse
         }
     | float as str 
         {
-            FLOAT (float_of_string float)
+            FLOAT (float_of_string str)
         }
     | '\'' chars as str '\''
         {

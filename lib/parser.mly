@@ -21,25 +21,48 @@
   let raise_error msg = 
     raise (ErrorMsg msg)
 
+  let unOp op e startpos endpos =
+    annotate (UnaryOp (op, e)) startpos endpos
+  let binOp op l r startpos endpos = 
+    annotate (BinaryOp (op, l, r)) startpos endpos
+
+  let access l startpos endpos =
+    annotate (Access l) startpos endpos
+  let assign l r startpos endpos =
+    annotate (Assign (l, r)) startpos endpos
+  let assignBinOp l r op startpos endpos =
+    let lvalue = access l startpos endpos in
+    let op = binOp op lvalue r startpos endpos in
+    assign l op startpos endpos
 %}
 
 /* ------------------------------------------ */
 /* Tokens declarations */
 /* Keywods and base types */
-%token IF ELSE FOR WHILE RETURN
-%token NULL TINT TCHAR TVOID TBOOL
+%token IF ELSE FOR WHILE DO RETURN
+%token NULL TINT TCHAR TVOID TBOOL TFLOAT
 
 /* Operators */
-%token BIT_AND ASSIGN
 %token PLUS MINUS TIMES "*" DIV MOD
+%token INCREMENT DECREMENT
 %token EQ NEQ LEQ LS GR GEQ
 %token AND OR NOT
+%token BIT_AND "&" BIT_OR BIT_XOR BIT_NOT
+%token SHIFT_LEFT SHIFT_RIGHT
+
+%token ASSIGN
+%token ASSIGN_PLUS ASSIGN_MINUS ASSIGN_TIMES
+%token ASSIGN_DIV ASSIGN_MOD
+%token ASSIGN_BIT_AND ASSIGN_BIT_OR
+%token ASSIGN_BIT_XOR
+%token ASSIGN_SHIFT_LEFT ASSIGN_SHIFT_RIGHT
 
 /* Identifiers and Const Values */
 %token <string> IDENT
 %token <int> INT
 %token <char> CHAR
 %token <bool> BOOL
+%token <float> FLOAT
 
 /* Other Symbols */
 %token SEMICOLON COMMA
@@ -50,16 +73,20 @@
 
 /* ------------------------------------------ */
 /* Precedence and associativity specification */
-//%left COMMA
-%right ASSIGN
+%left COMMA
+%right ASSIGN ASSIGN_PLUS ASSIGN_MINUS ASSIGN_TIMES ASSIGN_DIV ASSIGN_MOD ASSIGN_SHIFT_LEFT ASSIGN_SHIFT_RIGHT ASSIGN_BIT_AND ASSIGN_BIT_XOR ASSIGN_BIT_OR
 %left OR
 %left AND
+%left BIT_OR
+%left BIT_XOR
+%left BIT_AND
 %left EQ NEQ
 %left GR GEQ LS LEQ
+%left SHIFT_LEFT SHIFT_RIGHT
 %left PLUS MINUS
 %left TIMES DIV MOD
-%right NOT BIT_AND DEFER UPLUS UMINUS
-%left LSQR_BRACKET /*LPAREN*/
+%right PRE_INCR_DECR UPLUS UMINUS NOT BIT_NOT DEFER ADDR_OF SIZE_OF
+%left POST_INCR_DECR FN_CALL ARRAY_SUBSCRIPT STRUCT_ACCESS
 
 /* ------------------------------------------ */
 /* Starting symbol */
@@ -152,6 +179,7 @@ let stmt_or_decl :=
 let typ :=
 | TINT; { TypI }
 | TCHAR; { TypC }
+| TFLOAT; { TypF }
 | TVOID; { TypV }
 | TBOOL; { TypB }
 
@@ -165,9 +193,18 @@ let single_line_stmt :=
 let stmt :=
 | stmt = single_line_stmt; { Printf.printf("single"); stmt }
 | stmt = block; { stmt }
-| WHILE; g = if_guard; body = stmt;
+| WHILE; guard = if_guard; body = stmt;
   {
-    annotate (While (g, body)) $startpos $endpos
+    annotate (While (guard, body)) $startpos $endpos
+  }
+| DO; body = stmt; WHILE; guard = if_guard; SEMICOLON;
+  {
+    annotate (Block [
+      annotate (Stmt body) $startpos $endpos;
+      annotate (Stmt 
+        ( annotate (While (guard, body)) $startpos $endpos )
+      ) $startpos $endpos
+    ]) $startpos $endpos
   }
 | FOR; LPAREN; init = expr?; SEMICOLON; guard = expr?; SEMICOLON; incr = expr?; RPAREN; body = stmt;
   {
@@ -231,39 +268,62 @@ let expr :=
 let lexpr :=
 | id = IDENT; { annotate (AccVar id) $startpos $endpos }
 | LPAREN; e = lexpr; RPAREN; { e }
-| "*"; e = lexpr;
-  {
+| "*"; e = lexpr; {
     let e = annotate (Access e) $startpos $endpos in
     annotate (AccDeref e) $startpos $endpos
-  } %prec DEFER
-| "*"; e = aexpr; { annotate (AccDeref e) $startpos $endpos } /*%prec DEFER*/
-| e = lexpr; LSQR_BRACKET; index = expr; RSQR_BRACKET;
+  } //%prec DEFER /* Deferencing */
+| "*"; e = aexpr; {
+    annotate (AccDeref e) $startpos $endpos
+  } //%prec DEFER /* Deferencing */
+| e = lexpr; LSQR_BRACKET; index = expr; RSQR_BRACKET; //%prec ARRAY_SUBSCRIPT /* Array Access */
   { annotate (AccIndex (e, index)) $startpos $endpos }
 
 /* returns a node of type: expr */
 let rexpr :=
 | e = aexpr; { e }
-| fun_id = IDENT; LPAREN; args = fun_args; RPAREN; { annotate (Call (fun_id, args)) $startpos $endpos }
-| l = lexpr; ASSIGN; r = expr; { annotate (Assign (l, r)) $startpos $endpos }
+| fun_id = IDENT; LPAREN; args = fun_args; RPAREN; { annotate (Call (fun_id, args)) $startpos $endpos } //%prec FN_CALL /* Function Call*/
+| l = lexpr; ASSIGN; r = expr; { assign l r $startpos $endpos } /* Assignment operator */
+| l = lexpr; ASSIGN_PLUS; r = expr; { assignBinOp l r Add $startpos $endpos }
+| l = lexpr; ASSIGN_MINUS; r = expr; { assignBinOp l r Sub $startpos $endpos }
+| l = lexpr; ASSIGN_TIMES; r = expr; { assignBinOp l r Mult $startpos $endpos }
+| l = lexpr; ASSIGN_DIV; r = expr; { assignBinOp l r Div $startpos $endpos }
+| l = lexpr; ASSIGN_MOD; r = expr; { assignBinOp l r Mod $startpos $endpos }
+| l = lexpr; ASSIGN_BIT_AND; r = expr; { assignBinOp l r Bit_And $startpos $endpos }
+| l = lexpr; ASSIGN_BIT_OR; r = expr; { assignBinOp l r Bit_Or $startpos $endpos }
+| l = lexpr; ASSIGN_BIT_XOR; r = expr; { assignBinOp l r Bit_Xor $startpos $endpos }
+| l = lexpr; ASSIGN_SHIFT_LEFT; r = expr; { assignBinOp l r Shift_Left $startpos $endpos }
+| l = lexpr; ASSIGN_SHIFT_RIGHT; r = expr; { assignBinOp l r Shift_Right $startpos $endpos }
 
 | PLUS; e = expr; { e } %prec UPLUS
-| MINUS; e = expr; { annotate (UnaryOp (Neg, e)) $startpos $endpos } %prec UMINUS
-| l = expr; PLUS; r = expr; { annotate (BinaryOp (Add, l, r)) $startpos $endpos }
-| l = expr; MINUS; r = expr; { annotate (BinaryOp (Sub, l, r)) $startpos $endpos }
-| l = expr; TIMES; r = expr; { annotate (BinaryOp (Mult, l, r)) $startpos $endpos }
-| l = expr; DIV; r = expr; { annotate (BinaryOp (Div, l, r)) $startpos $endpos }
-| l = expr; MOD; r = expr; { annotate (BinaryOp (Mod, l, r)) $startpos $endpos }
+| MINUS; e = expr; { unOp Neg e $startpos $endpos } %prec UMINUS
+| l = expr; PLUS; r = expr; { binOp Add l r $startpos $endpos }
+| l = expr; MINUS; r = expr; { binOp Sub l r $startpos $endpos }
+| l = expr; TIMES; r = expr; { binOp Mult l r $startpos $endpos }
+| l = expr; DIV; r = expr; { binOp Div l r $startpos $endpos }
+| l = expr; MOD; r = expr; { binOp Mod l r $startpos $endpos }
 
-| l = expr; AND; r = expr; { annotate (BinaryOp (And, l, r)) $startpos $endpos }
-| l = expr; OR; r = expr; { annotate (BinaryOp (Or, l, r)) $startpos $endpos }
-| NOT; e = expr; { annotate (UnaryOp (Not, e)) $startpos $endpos }
+| l = expr; AND; r = expr; { binOp And l r $startpos $endpos }
+| l = expr; OR; r = expr; { binOp Or l r $startpos $endpos }
+| NOT; e = expr; { unOp Not e $startpos $endpos }
 
-| l = expr; LS; r = expr; { annotate (BinaryOp (Less, l, r)) $startpos $endpos }
-| l = expr; GR; r = expr; { annotate (BinaryOp (Greater, l, r)) $startpos $endpos }
-| l = expr; LEQ; r = expr; { annotate (BinaryOp (Leq, l, r)) $startpos $endpos }
-| l = expr; GEQ; r = expr; { annotate (BinaryOp (Geq, l, r)) $startpos $endpos }
-| l = expr; EQ; r = expr; { annotate (BinaryOp (Equal, l, r)) $startpos $endpos }
-| l = expr; NEQ; r = expr; { annotate (BinaryOp (Neq, l, r)) $startpos $endpos }
+| l = expr; LS; r = expr; { binOp Less l r $startpos $endpos }
+| l = expr; GR; r = expr; { binOp Greater l r $startpos $endpos }
+| l = expr; LEQ; r = expr; { binOp Leq l r $startpos $endpos }
+| l = expr; GEQ; r = expr; { binOp Geq l r $startpos $endpos }
+| l = expr; EQ; r = expr; { binOp Equal l r $startpos $endpos }
+| l = expr; NEQ; r = expr; { binOp Neq l r $startpos $endpos }
+
+| l = expr; BIT_AND; r = expr; { binOp Bit_And l r $startpos $endpos }
+| l = expr; BIT_OR; r = expr; { binOp Bit_Or l r $startpos $endpos }
+| BIT_NOT; e = expr; { unOp Bit_Not e $startpos $endpos }
+| l = expr; BIT_XOR; r = expr; { binOp Bit_Xor l r $startpos $endpos }
+| l = expr; SHIFT_LEFT; r = expr; { binOp Shift_Left l r $startpos $endpos }
+| l = expr; SHIFT_RIGHT; r = expr; { binOp Shift_Right l r $startpos $endpos }
+
+| INCREMENT; e = expr; { unOp Pre_Incr e $startpos $endpos } %prec PRE_INCR_DECR
+| DECREMENT; e = expr; { unOp Pre_Decr e $startpos $endpos } %prec PRE_INCR_DECR
+| e = expr; INCREMENT; { unOp Post_Incr e $startpos $endpos } //%prec POST_INCR_DECR
+| e = expr; DECREMENT; { unOp Post_Decr e $startpos $endpos } //%prec POST_INCR_DECR
 
 /* returns: expr list */
 let fun_args :=
@@ -276,6 +336,7 @@ let aexpr :=
 | ival = INT; { annotate (ILiteral ival) $startpos $endpos }
 | cval = CHAR; { annotate (CLiteral cval) $startpos $endpos }
 | bval = BOOL; { annotate (BLiteral bval) $startpos $endpos }
+| fval = FLOAT; { annotate (FLiteral fval) $startpos $endpos }
 | NULL; { annotate (ILiteral 0) $startpos $endpos }
 | LPAREN; e = rexpr; RPAREN; { e }
-| BIT_AND; e = lexpr; { annotate (Addr e) $startpos $endpos }
+| "&"; e = lexpr; { annotate (Addr e) $startpos $endpos } //%prec ADDR_OF
