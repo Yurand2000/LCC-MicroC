@@ -28,6 +28,7 @@ type token =
 | INT of int
 | FLOAT of float
 | CHAR of char
+| STRING of string
 | BOOL of bool
 
 (* Other Symbols *)

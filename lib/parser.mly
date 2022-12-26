@@ -72,6 +72,7 @@
 %token <char> CHAR
 %token <bool> BOOL
 %token <float> FLOAT
+%token <string> STRING
 
 /* Other Symbols */
 %token SEMICOLON COMMA DOT ARROW
@@ -94,8 +95,12 @@
 %left SHIFT_LEFT SHIFT_RIGHT
 %left PLUS MINUS
 %left TIMES DIV MOD
-%right PRE_INCR_DECR UPLUS UMINUS NOT BIT_NOT /*DEFER ADDR_OF SIZEOF*/
-//%left POST_INCR_DECR FN_CALL ARRAY_SUBSCRIPT STRUCT_ACCESS
+%right PRE_INCR_DECR UPLUS UMINUS NOT BIT_NOT DEFER ADDR_OF SIZEOF
+%left POST_INCR_DECR FN_CALL ARRAY_SUBSCRIPT STRUCT_ACCESS
+
+%left DOT ARROW
+%left INCREMENT DECREMENT
+%left LPAREN RPAREN LSQR_BRACKET RSQR_BRACKET LBRACE RBRACE
 
 /* ------------------------------------------ */
 /* Starting symbol */
@@ -136,7 +141,7 @@ let topdecl :=
 /* returns: identifier * (typ * identifier) list */
 let structdecl :=
 | STRUCT; name = IDENT; SEMICOLON; { (name, []) }
-| STRUCT; name = IDENT; LBRACE; fields = structFields; RBRACE; { (name, fields) }
+| STRUCT; name = IDENT; LBRACE; fields = structFields; RBRACE; SEMICOLON; { (name, fields) }
 
 /* returns: (typ * identifier) list */
 let structFields :=
@@ -167,9 +172,9 @@ let vardecl :=
 /* returns: (variable_description * expr option) list */
 let vardecl_multi :=
 | desc = vardesc; { [(desc, None)] }
-| desc = vardesc; ASSIGN; e = expr; { [(desc, Some(e))] }
+| desc = vardesc; ASSIGN; e = expr_no_comma; { [(desc, Some(e))] }
 | desc = vardesc; COMMA; other = vardecl_multi; { (desc, None) :: other }
-| desc = vardesc; ASSIGN; e = expr; COMMA; other = vardecl_multi; { (desc, Some(e)) :: other }
+| desc = vardesc; ASSIGN; e = expr_no_comma; COMMA; other = vardecl_multi; { (desc, Some(e)) :: other }
 
 
 /* returns: variable_description (local definition, not from ast.ml) */
@@ -222,7 +227,7 @@ let block_inner :=
       | Some(block) -> stmt :: block
       | None -> stmt :: []
   }
-| vardescs = vardecl; block = block_inner?;
+| vardescs = vardecl; SEMICOLON; block = block_inner?;
   {
     let stmt_builder vardesc =
       let (typ, desc, expr) = vardesc in
@@ -253,7 +258,7 @@ let typ :=
 | TFLOAT; { TypF }
 | TVOID; { TypV }
 | TBOOL; { TypB }
-| struct_name = IDENT; { TypS struct_name }
+| STRUCT; struct_name = IDENT; { TypS struct_name }
 
 /* returns a node of type: typ */
 let adv_typ :=
@@ -337,10 +342,15 @@ let if_body :=
 | stmt = single_line_stmt; { stmt }
 | stmt = block; { stmt }
 
-/* returns a node of type: expr */
 let expr :=
 | e = rexpr; { e }
 | e = lexpr; { annotate (Access e) $startpos $endpos }
+
+/* returns a node of type: expr */
+let expr_no_comma :=
+| e = rexpr_no_comma; { e }
+| e = lexpr; { annotate (Access e) $startpos $endpos }
+| LPAREN; e1 = expr; COMMA; e2 = expr; RPAREN; { annotate (CommaOp (e1, e2)) $startpos $endpos }
 
 /* returns a node of type: access */
 let lexpr :=
@@ -351,28 +361,73 @@ let lexpr :=
   {
     let e = annotate (Access e) $startpos $endpos in
     annotate (AccDeref e) $startpos $endpos
-  } //%prec DEFER /* Deferencing */
-| "*"; e = aexpr; { annotate (AccDeref e) $startpos $endpos }
-  //%prec DEFER /* Deferencing */
+  } %prec DEFER /* Deferencing */
 
 | e = lexpr; LSQR_BRACKET; index = expr; RSQR_BRACKET; { annotate (AccIndex (e, index)) $startpos $endpos }
-  //%prec ARRAY_SUBSCRIPT /* Array Access */
+  %prec ARRAY_SUBSCRIPT /* Array Access */
 
 | str = lexpr; DOT; field = IDENT; { annotate (AccDot (str, field)) $startpos $endpos }
-  //%prec STRUCT_ACCESS /* Struct access */
+  %prec STRUCT_ACCESS /* Struct access */
 
 | e = lexpr; ARROW; field = IDENT;
   {
     let e = annotate (Access e) $startpos $endpos in
     annotate (AccArrow (e, field)) $startpos $endpos
-  } //%prec STRUCT_ACCESS /* Struct deref access */
-| e = aexpr; ARROW; field = IDENT; { annotate (AccArrow (e, field)) $startpos $endpos }
-  //%prec STRUCT_ACCESS /* Struct deref access */
+  } %prec STRUCT_ACCESS /* Struct deref access */
+
+/* returns a node of type: expr */
+let rexpr_no_comma :=
+| e = aexpr; { e }
+| fun_id = IDENT; LPAREN; args = fun_args; RPAREN; { annotate (Call (fun_id, args)) $startpos $endpos } %prec FN_CALL /* Function Call*/
+| l = lexpr; ASSIGN; r = expr_no_comma; { assign l r $startpos $endpos } /* Assignment operator */
+| l = lexpr; ASSIGN_PLUS; r = expr_no_comma; { assignBinOp l r Add $startpos $endpos }
+| l = lexpr; ASSIGN_MINUS; r = expr_no_comma; { assignBinOp l r Sub $startpos $endpos }
+| l = lexpr; ASSIGN_TIMES; r = expr_no_comma; { assignBinOp l r Mult $startpos $endpos }
+| l = lexpr; ASSIGN_DIV; r = expr_no_comma; { assignBinOp l r Div $startpos $endpos }
+| l = lexpr; ASSIGN_MOD; r = expr_no_comma; { assignBinOp l r Mod $startpos $endpos }
+| l = lexpr; ASSIGN_BIT_AND; r = expr_no_comma; { assignBinOp l r Bit_And $startpos $endpos }
+| l = lexpr; ASSIGN_BIT_OR; r = expr_no_comma; { assignBinOp l r Bit_Or $startpos $endpos }
+| l = lexpr; ASSIGN_BIT_XOR; r = expr_no_comma; { assignBinOp l r Bit_Xor $startpos $endpos }
+| l = lexpr; ASSIGN_SHIFT_LEFT; r = expr_no_comma; { assignBinOp l r Shift_Left $startpos $endpos }
+| l = lexpr; ASSIGN_SHIFT_RIGHT; r = expr_no_comma; { assignBinOp l r Shift_Right $startpos $endpos }
+
+| PLUS; e = expr_no_comma; { e } %prec UPLUS
+| MINUS; e = expr_no_comma; { unOp Neg e $startpos $endpos } %prec UMINUS
+| l = expr_no_comma; PLUS; r = expr_no_comma; { binOp Add l r $startpos $endpos }
+| l = expr_no_comma; MINUS; r = expr_no_comma; { binOp Sub l r $startpos $endpos }
+| l = expr_no_comma; TIMES; r = expr_no_comma; { binOp Mult l r $startpos $endpos }
+| l = expr_no_comma; DIV; r = expr_no_comma; { binOp Div l r $startpos $endpos }
+| l = expr_no_comma; MOD; r = expr_no_comma; { binOp Mod l r $startpos $endpos }
+
+| l = expr_no_comma; AND; r = expr_no_comma; { binOp And l r $startpos $endpos }
+| l = expr_no_comma; OR; r = expr_no_comma; { binOp Or l r $startpos $endpos }
+| NOT; e = expr_no_comma; { unOp Not e $startpos $endpos }
+
+| l = expr_no_comma; LS; r = expr_no_comma; { binOp Less l r $startpos $endpos }
+| l = expr_no_comma; GR; r = expr_no_comma; { binOp Greater l r $startpos $endpos }
+| l = expr_no_comma; LEQ; r = expr_no_comma; { binOp Leq l r $startpos $endpos }
+| l = expr_no_comma; GEQ; r = expr_no_comma; { binOp Geq l r $startpos $endpos }
+| l = expr_no_comma; EQ; r = expr_no_comma; { binOp Equal l r $startpos $endpos }
+| l = expr_no_comma; NEQ; r = expr_no_comma; { binOp Neq l r $startpos $endpos }
+
+| l = expr_no_comma; BIT_AND; r = expr_no_comma; { binOp Bit_And l r $startpos $endpos }
+| l = expr_no_comma; BIT_OR; r = expr_no_comma; { binOp Bit_Or l r $startpos $endpos }
+| BIT_NOT; e = expr_no_comma; { unOp Bit_Not e $startpos $endpos }
+| l = expr_no_comma; BIT_XOR; r = expr_no_comma; { binOp Bit_Xor l r $startpos $endpos }
+| l = expr_no_comma; SHIFT_LEFT; r = expr_no_comma; { binOp Shift_Left l r $startpos $endpos }
+| l = expr_no_comma; SHIFT_RIGHT; r = expr_no_comma; { binOp Shift_Right l r $startpos $endpos }
+
+| INCREMENT; e = expr_no_comma; { unOp Pre_Incr e $startpos $endpos } %prec PRE_INCR_DECR
+| DECREMENT; e = expr_no_comma; { unOp Pre_Decr e $startpos $endpos } %prec PRE_INCR_DECR
+| e = expr_no_comma; INCREMENT; { unOp Post_Incr e $startpos $endpos } %prec POST_INCR_DECR
+| e = expr_no_comma; DECREMENT; { unOp Post_Decr e $startpos $endpos } %prec POST_INCR_DECR
+
+| SIZEOF; t = adv_typ; { annotate (SizeOf t) $startpos $endpos }
 
 /* returns a node of type: expr */
 let rexpr :=
 | e = aexpr; { e }
-| fun_id = IDENT; LPAREN; args = fun_args; RPAREN; { annotate (Call (fun_id, args)) $startpos $endpos } //%prec FN_CALL /* Function Call*/
+| fun_id = IDENT; LPAREN; args = fun_args; RPAREN; { annotate (Call (fun_id, args)) $startpos $endpos } %prec FN_CALL /* Function Call*/
 | l = lexpr; ASSIGN; r = expr; { assign l r $startpos $endpos } /* Assignment operator */
 | l = lexpr; ASSIGN_PLUS; r = expr; { assignBinOp l r Add $startpos $endpos }
 | l = lexpr; ASSIGN_MINUS; r = expr; { assignBinOp l r Sub $startpos $endpos }
@@ -413,17 +468,16 @@ let rexpr :=
 
 | INCREMENT; e = expr; { unOp Pre_Incr e $startpos $endpos } %prec PRE_INCR_DECR
 | DECREMENT; e = expr; { unOp Pre_Decr e $startpos $endpos } %prec PRE_INCR_DECR
-| e = expr; INCREMENT; { unOp Post_Incr e $startpos $endpos } //%prec POST_INCR_DECR
-| e = expr; DECREMENT; { unOp Post_Decr e $startpos $endpos } //%prec POST_INCR_DECR
+| e = expr; INCREMENT; { unOp Post_Incr e $startpos $endpos } %prec POST_INCR_DECR
+| e = expr; DECREMENT; { unOp Post_Decr e $startpos $endpos } %prec POST_INCR_DECR
 
-| e1 = expr; COMMA; e2 = expr; { annotate (CommaOp (e1, e2)) $startpos $endpos }
 | SIZEOF; t = adv_typ; { annotate (SizeOf t) $startpos $endpos }
 
 /* returns: expr list */
 let fun_args :=
 | { [] }
-| e = expr; { [ e ] }
-| e = expr; COMMA; exprs = fun_args; { e :: exprs }
+| e = expr_no_comma; { [ e ] }
+| e = expr_no_comma; COMMA; exprs = fun_args; { e :: exprs }
 
 /* returns a node of type: expr */
 let aexpr :=
@@ -431,6 +485,7 @@ let aexpr :=
 | cval = CHAR; { annotate (CLiteral cval) $startpos $endpos }
 | bval = BOOL; { annotate (BLiteral bval) $startpos $endpos }
 | fval = FLOAT; { annotate (FLiteral fval) $startpos $endpos }
+| sval = STRING; { annotate (SLiteral sval) $startpos $endpos }
 | NULL; { annotate (ILiteral 0) $startpos $endpos }
 | LPAREN; e = rexpr; RPAREN; { e }
-| "&"; e = lexpr; { annotate (Addr e) $startpos $endpos } //%prec ADDR_OF
+| "&"; e = lexpr; { annotate (Addr e) $startpos $endpos } %prec ADDR_OF

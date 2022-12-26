@@ -18,6 +18,8 @@ let hex_digits = digits | ['a' - 'f'] | ['A' - 'F']
 let hex_digits_non_zero = digits_non_zero | ['a' - 'f'] | ['A' - 'F']
 let special_chars = "\\'" | "\\b" | "\\f" | "\\t" | "\\\\" | "\\r" | "\\n"
 let chars = [^ '\'' '\b' '\t' '\\' '\r' '\n' ]
+let str_special_chars = "\\\"" | "\\b" | "\\f" | "\\t" | "\\\\" | "\\r" | "\\n"
+let str_chars = [^ '\"' '\b' '\t' '\\' '\r' '\n' ]
 let whitespace = ' ' | '\t' | '\n' | '\r'
 
 (* Identifier Regular Expression *)
@@ -130,6 +132,10 @@ rule next_token = parse
     | float as str 
         {
             FLOAT (float_of_string str)
+        }
+    | '\"' (str_chars | str_special_chars) as str '\"'
+        {
+            STRING str
         }
     | '\'' chars as str '\''
         {
