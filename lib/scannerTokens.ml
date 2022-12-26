@@ -31,8 +31,7 @@ type token =
 | BOOL of bool
 
 (* Other Symbols *)
-| SEMICOLON | COMMA | DOT
-| ARROW
+| SEMICOLON | COMMA | DOT | ARROW
 | LPAREN | RPAREN
 | LSQR_BRACKET | RSQR_BRACKET
 | LBRACE | RBRACE

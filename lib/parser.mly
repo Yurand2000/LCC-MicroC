@@ -4,6 +4,7 @@
 
 %{
   open Ast
+  open List
 
   type variable_description = 
   | Id of string
@@ -20,6 +21,13 @@
 
   let raise_error msg = 
     raise (ErrorMsg msg)
+
+  let rec build_vardecl t desc =
+    match desc with
+    | Id id -> (t, id)
+    | Ptr decl -> build_vardecl (TypP t) decl
+    | Array decl -> build_vardecl (TypA (t, None)) decl
+    | ArrayNum (decl, size) -> build_vardecl (TypA (t, Some size)) decl
 
   let unOp op e startpos endpos =
     annotate (UnaryOp (op, e)) startpos endpos
@@ -41,6 +49,7 @@
 /* Keywods and base types */
 %token IF ELSE FOR WHILE DO RETURN
 %token NULL TINT TCHAR TVOID TBOOL TFLOAT
+%token STRUCT SIZEOF
 
 /* Operators */
 %token PLUS MINUS TIMES "*" DIV MOD
@@ -65,7 +74,7 @@
 %token <float> FLOAT
 
 /* Other Symbols */
-%token SEMICOLON COMMA
+%token SEMICOLON COMMA DOT ARROW
 %token LPAREN RPAREN
 %token LSQR_BRACKET RSQR_BRACKET
 %token LBRACE RBRACE
@@ -85,8 +94,8 @@
 %left SHIFT_LEFT SHIFT_RIGHT
 %left PLUS MINUS
 %left TIMES DIV MOD
-%right PRE_INCR_DECR UPLUS UMINUS NOT BIT_NOT DEFER ADDR_OF SIZE_OF
-%left POST_INCR_DECR FN_CALL ARRAY_SUBSCRIPT STRUCT_ACCESS
+%right PRE_INCR_DECR UPLUS UMINUS NOT BIT_NOT /*DEFER ADDR_OF SIZEOF*/
+//%left POST_INCR_DECR FN_CALL ARRAY_SUBSCRIPT STRUCT_ACCESS
 
 /* ------------------------------------------ */
 /* Starting symbol */
@@ -102,29 +111,66 @@ let program :=
 | decl = topdecl; prog = program;
   {
     match prog with
-    | Prog decls -> Prog( decl :: decls )
+    | Prog decls -> Prog( decl @ decls )
   }
 | EOF; { Prog([]) }
 | error; { raise_error "Program Error" }
 
-/* returns a node of type: topdecl */
+/* returns: topdecl list */
 let topdecl :=
-| (t, id) = vardecl; SEMICOLON; { annotate (Vardec (t, id)) $startpos $endpos }
-| f_decl = fundecl; { annotate (Fundecl f_decl) $startpos $endpos }
-
-/* returns: typ * identifier */
-let vardecl :=
-| t = typ; desc = vardesc;
+| v_decls = vardecl; SEMICOLON;
   {
-    let rec build_vardecl t desc =
-      match desc with
-      | Id id -> (t, id)
-      | Ptr decl -> build_vardecl (TypP t) decl
-      | Array decl -> build_vardecl (TypA (t, None)) decl
-      | ArrayNum (decl, size) -> build_vardecl (TypA (t, Some size)) decl
+    let vardecl_builder vardesc =
+      let (typ, desc, expr) = vardesc in
+      annotate (Vardec (typ, desc, expr)) $startpos $endpos
     in
-    build_vardecl t desc
+    List.map vardecl_builder v_decls
   }
+| f_decl = fundecl; { [annotate (Fundecl f_decl) $startpos $endpos] }
+| s_decl = structdecl;
+  {
+    let (name, fields) = s_decl in
+    [ annotate (StructDecl (name, fields)) $startpos $endpos ]
+  }
+
+/* returns: identifier * (typ * identifier) list */
+let structdecl :=
+| STRUCT; name = IDENT; SEMICOLON; { (name, []) }
+| STRUCT; name = IDENT; LBRACE; fields = structFields; RBRACE; { (name, fields) }
+
+/* returns: (typ * identifier) list */
+let structFields :=
+| fields = structField; SEMICOLON; { fields }
+| fields = structField; SEMICOLON; other_fields = structFields; { fields @ other_fields }
+
+/* returns: (typ * identifier) list */
+let structField :=
+| t = typ; descs = structFieldDeclMulti; { List.map (build_vardecl t) descs }
+
+/* returns: variable_description list */
+let structFieldDeclMulti :=
+| desc = vardesc; { [desc] }
+| desc = vardesc; COMMA; descs = structFieldDeclMulti; { desc :: descs }
+
+/* returns: (typ * identifier * expr option) list */
+let vardecl :=
+| t = typ; descs = vardecl_multi;
+  {
+    let vardecl_builder vardesc =
+      let (desc, expr) = vardesc in
+      let (typ, desc) = build_vardecl t desc in
+      (typ, desc, expr)
+    in
+    List.map vardecl_builder descs
+  }
+
+/* returns: (variable_description * expr option) list */
+let vardecl_multi :=
+| desc = vardesc; { [(desc, None)] }
+| desc = vardesc; ASSIGN; e = expr; { [(desc, Some(e))] }
+| desc = vardesc; COMMA; other = vardecl_multi; { (desc, None) :: other }
+| desc = vardesc; ASSIGN; e = expr; COMMA; other = vardecl_multi; { (desc, Some(e)) :: other }
+
 
 /* returns: variable_description (local definition, not from ast.ml) */
 let vardesc :=
@@ -149,8 +195,12 @@ let fundecl :=
 /* returns: (typ * identifier) list */
 let funargs :=
 | { [] }
-| decl = vardecl; { [decl] }
-| decl = vardecl; COMMA; args = funargs; { decl :: args }
+| decl = funarg; { [decl] }
+| decl = funarg; COMMA; args = funargs; { decl :: args }
+
+/* returns: typ * identifier */
+let funarg :=
+| t = typ; desc = vardesc; { build_vardecl t desc }
 
 /* returns a node of type: stmt */
 let block :=
@@ -165,15 +215,36 @@ let block :=
 
 /* returns: stmtordec list */
 let block_inner :=
-| stmt_decl = stmt_or_decl; { [ stmt_decl ] }
-| stmt_decl = stmt_or_decl; block = block_inner; { stmt_decl :: block }
-
-/* returns a node of type: stmtordec */
-let stmt_or_decl :=
-| stmt = stmt;
-  { annotate (Stmt stmt) $startpos $endpos }
-| (t, desc) = vardecl;
-  { annotate (Dec (t, desc)) $startpos $endpos }
+| stmt = stmt; block = block_inner?;
+  {
+    let stmt = annotate (Stmt stmt) $startpos $endpos in
+    match block with
+      | Some(block) -> stmt :: block
+      | None -> stmt :: []
+  }
+| vardescs = vardecl; block = block_inner?;
+  {
+    let stmt_builder vardesc =
+      let (typ, desc, expr) = vardesc in
+      let declaration = annotate (Dec (typ, desc)) $startpos $endpos in
+      match expr with
+        | Some(expr) ->
+          let access = annotate (AccVar desc) $startpos $endpos in
+          let assign = annotate (Assign (access, expr)) $startpos $endpos in
+          let stmt = annotate (Expr assign) $startpos $endpos in
+          declaration :: (annotate (Stmt stmt) $startpos $endpos) :: []
+        | None -> declaration :: []
+    in
+    let rec build vardescs =
+      match vardescs with
+        | [] -> []
+        | hd::tl -> (stmt_builder hd) @ (build tl)
+    in
+    let new_stmts = build vardescs in
+    match block with
+      | Some(block) -> new_stmts @ block
+      | None -> new_stmts
+  }
 
 /* returns a node of type: typ */
 let typ :=
@@ -182,6 +253,13 @@ let typ :=
 | TFLOAT; { TypF }
 | TVOID; { TypV }
 | TBOOL; { TypB }
+| struct_name = IDENT; { TypS struct_name }
+
+/* returns a node of type: typ */
+let adv_typ :=
+| t = typ; { t }
+| "*"; t = adv_typ; { TypP t }
+| t = adv_typ; LSQR_BRACKET; i = INT?; RSQR_BRACKET; { TypA (t, i) }
 
 /* returns a node of type: stmt */
 let single_line_stmt :=
@@ -191,7 +269,7 @@ let single_line_stmt :=
 
 /* returns a node of type: stmt */
 let stmt :=
-| stmt = single_line_stmt; { Printf.printf("single"); stmt }
+| stmt = single_line_stmt; { stmt }
 | stmt = block; { stmt }
 | WHILE; guard = if_guard; body = stmt;
   {
@@ -268,15 +346,28 @@ let expr :=
 let lexpr :=
 | id = IDENT; { annotate (AccVar id) $startpos $endpos }
 | LPAREN; e = lexpr; RPAREN; { e }
-| "*"; e = lexpr; {
+
+| "*"; e = lexpr;
+  {
     let e = annotate (Access e) $startpos $endpos in
     annotate (AccDeref e) $startpos $endpos
   } //%prec DEFER /* Deferencing */
-| "*"; e = aexpr; {
-    annotate (AccDeref e) $startpos $endpos
-  } //%prec DEFER /* Deferencing */
-| e = lexpr; LSQR_BRACKET; index = expr; RSQR_BRACKET; //%prec ARRAY_SUBSCRIPT /* Array Access */
-  { annotate (AccIndex (e, index)) $startpos $endpos }
+| "*"; e = aexpr; { annotate (AccDeref e) $startpos $endpos }
+  //%prec DEFER /* Deferencing */
+
+| e = lexpr; LSQR_BRACKET; index = expr; RSQR_BRACKET; { annotate (AccIndex (e, index)) $startpos $endpos }
+  //%prec ARRAY_SUBSCRIPT /* Array Access */
+
+| str = lexpr; DOT; field = IDENT; { annotate (AccDot (str, field)) $startpos $endpos }
+  //%prec STRUCT_ACCESS /* Struct access */
+
+| e = lexpr; ARROW; field = IDENT;
+  {
+    let e = annotate (Access e) $startpos $endpos in
+    annotate (AccArrow (e, field)) $startpos $endpos
+  } //%prec STRUCT_ACCESS /* Struct deref access */
+| e = aexpr; ARROW; field = IDENT; { annotate (AccArrow (e, field)) $startpos $endpos }
+  //%prec STRUCT_ACCESS /* Struct deref access */
 
 /* returns a node of type: expr */
 let rexpr :=
@@ -324,6 +415,9 @@ let rexpr :=
 | DECREMENT; e = expr; { unOp Pre_Decr e $startpos $endpos } %prec PRE_INCR_DECR
 | e = expr; INCREMENT; { unOp Post_Incr e $startpos $endpos } //%prec POST_INCR_DECR
 | e = expr; DECREMENT; { unOp Post_Decr e $startpos $endpos } //%prec POST_INCR_DECR
+
+| e1 = expr; COMMA; e2 = expr; { annotate (CommaOp (e1, e2)) $startpos $endpos }
+| SIZEOF; t = adv_typ; { annotate (SizeOf t) $startpos $endpos }
 
 /* returns: expr list */
 let fun_args :=

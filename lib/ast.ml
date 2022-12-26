@@ -29,7 +29,7 @@ type typ =
   | TypC (* Type char *)
   | TypA of typ * int option (* Array type *)
   | TypP of typ (* Pointer type  *)
-  | TypS of typ list (* Struct type *)
+  | TypS of identifier (* Struct type *)
   | TypV (* Type void  *)
 [@@deriving show]
 
@@ -45,6 +45,7 @@ and expr_node =
   | BLiteral of bool (* Bool literal    *)
   | UnaryOp of uop * expr (* Unary primitive operator  *)
   | BinaryOp of binop * expr * expr (* Binary primitive operator  *)
+  | CommaOp of expr * expr (* Comma operator *)
   | Call of identifier * expr list (* Function call f(...)    *)
   | SizeOf of typ
 [@@deriving show]
@@ -86,7 +87,10 @@ type fun_decl = {
 
 type topdecl = topdecl_node annotated_node
 
-and topdecl_node = Fundecl of fun_decl | Vardec of typ * identifier
+and topdecl_node =
+  | Fundecl of fun_decl
+  | Vardec of typ * identifier * expr option
+  | StructDecl of identifier * (typ * identifier) list
 [@@deriving show]
 
 type program = Prog of topdecl list [@@deriving show]
