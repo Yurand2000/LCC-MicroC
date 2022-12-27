@@ -187,6 +187,15 @@ let vardesc :=
 
 /* returns: fun_decl */
 let fundecl :=
+| t = typ; fname = IDENT; LPAREN; args = funargs; RPAREN; SEMICOLON;
+  {
+    {
+      typ = t;
+      fname = fname;
+      formals = args;
+      body = { annotate (Block []) $startpos $endpos };
+    }
+  }
 | t = typ; fname = IDENT; LPAREN; args = funargs; RPAREN; body = block;
   {
     {
