@@ -124,7 +124,6 @@ rule next_token = parse
     | ">>=" { ASSIGN_SHIFT_RIGHT }
 
     (* Identifiers and Values *)
-    | ident as str { IDENT str }
     | integer as str 
         {
             INT (int_of_string str)
@@ -156,6 +155,8 @@ rule next_token = parse
     
     | "true" { BOOL (true) }
     | "false" { BOOL (false) }
+    
+    | ident as str { IDENT str }
         
     (* Other Symbols *)
     | ';' { SEMICOLON }

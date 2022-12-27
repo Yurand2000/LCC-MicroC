@@ -80,5 +80,7 @@ int main()
     n = 6;
 
     heapSort(arr, n); 
-    printArray(arr, n); 
+    printArray(arr, n);
+
+    return 0;
 } 
