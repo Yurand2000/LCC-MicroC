@@ -1,49 +1,35 @@
 exception DuplicateEntry of Ast.identifier
 
-type 'a names = (Ast.identifier, 'a) Hashtbl.t
+type 'a t = ((Ast.identifier * 'a) list) list
 
-type 'a t = 
-{
-    global : 'a names;
-    local: ('a names) list;
-}
+let lookup_in_block block name =
+    let is_same_name (id, _) = (name = id) in
+    List.find_opt is_same_name block
 
-let empty_table = { global = Hashtbl.create 10; local = [] }
+let empty_table = [ [] ]
 
-let begin_block env = { global = env.global; local = Hashtbl.create 10 :: env.local }
+let begin_block env = [] :: env
 
-let end_block env = { global = env.global; local = List.tl env.local }
-
-let update_entry id def env =
-    let head = match env.local with
-        | [] -> env.global
-        | hd::_ -> hd
-    in
-    let _ = Hashtbl.add head id def in
-    env
+let end_block env = 
+    match env with
+    | _::snd::tl -> snd::tl
+    | _::_ -> failwith "Cannot remove global scope from environment table!"
+    | [] -> failwith "Environment table cannot be empty!"
 
 let add_entry id def env =
-    let head = match env.local with
-        | [] -> env.global
-        | hd::_ -> hd
-    in
-    let _ = match Hashtbl.find_opt head id with
+    let (hd, tl) = (List.hd env, List.tl env) in
+    match lookup_in_block hd id with
         | Some(_) -> raise (DuplicateEntry id)
-        | None -> Hashtbl.add head id def
-    in
-    env
+        | None -> ((id, def) :: hd) :: tl
 
-let lookup_opt id env = 
-    let env_blocks = (List.rev (env.global :: List.rev env.local)) in
-    let rec rec_lookup id blocks =
-        match blocks with
-        | [] -> None
-        | hd::tl -> 
-            match Hashtbl.find_opt hd id with
-            | Some(res) -> Some(res)
-            | None -> rec_lookup id tl
-    in
-    rec_lookup id env_blocks
+let rec lookup_opt id env =
+    match env with
+    | [] -> None
+    | hd::tl -> (
+        match lookup_in_block hd id with
+        | Some((_, value)) -> Some(value)
+        | None -> lookup_opt id tl
+    )
 
 let lookup id env = 
     match lookup_opt id env with
@@ -51,8 +37,7 @@ let lookup id env =
     | None -> failwith "Entry not found"
 
 let of_alist list = 
-    let env = empty_table in
-    let add_to_env (id, def) env =
+    let add_to_env env (id, def) =
         add_entry id def env
     in
-    List.fold_right add_to_env list env
+    List.fold_left add_to_env empty_table list

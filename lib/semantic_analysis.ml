@@ -31,17 +31,17 @@ let rec ast_type_to_typ typ =
     | TypV -> Void
 
 let lookup_fn_def env id =
-    match lookup_opt fn env with
+    match lookup_opt id env with
     | Some(FunDef(ret_typ, arg_def_types)) -> (ret_typ, arg_def_types)
     | Some(_) -> failwith "Is not a function"
     | None -> failwith "Function not defined"
 and lookup_var_type env id =
-    match lookup_opt fn env with
+    match lookup_opt id env with
     | Some(VarDef(typ)) -> typ
     | Some(_) -> failwith "Is not a variable"
     | None -> failwith "Variable not defined"
 and lookup_struct_def env id =
-    match lookup_opt fn env with
+    match lookup_opt id env with
     | Some(StructDef(fields)) -> fields
     | Some(_) -> failwith "Is not a struct"
     | None -> failwith "Struct not defined"
@@ -88,7 +88,7 @@ and tc_access env access =
         let (env, expr_type) = tc_expr env expr in
         match (access_type, expr_type) with
         | (Array(typ), Int) -> (env, typ)
-        | (Array(typ), _) -> failwith "Array access index is not an integer"
+        | (Array(_), _) -> failwith "Array access index is not an integer"
         | _ -> failwith "Array access requested on non array type"
     )
     | AccDot(access, field) -> (
@@ -105,14 +105,14 @@ and tc_access env access =
     )
 and search_field_in_struct env str_id field =
     let fields = lookup_struct_def env str_id in
-    let field_has_name (_, id) name = (id = name) in
+    let field_has_name name (_, id) = (id = name) in
     match List.find_opt (field_has_name field) fields with
     | Some((typ, _)) -> typ
     | None -> failwith "The struct definition does not contain the required field"
 
 (* Type Check function call expression *)
 and tc_fn_call env fn args =
-    let fn_def = lookup_fn_def env fn in
+    let (ret_typ, arg_def_types) = lookup_fn_def env fn in
     let (env, arg_types) = tc_fn_args env args in
     match List.equal (=) arg_def_types arg_types with
     | true -> (env, ret_typ)
@@ -241,7 +241,7 @@ let rec tc_program program =
 and tc_var_decl env (typ, id, expr) =
     let type_id = ast_type_to_typ typ in
     let tc = match expr with
-        | Some(expr) -> (tc_expr env expr) = type_id
+        | Some(expr) -> snd (tc_expr env expr) = type_id
         | None -> true
     in
     match tc with
@@ -265,7 +265,7 @@ and tc_struct_def env (id, fields) =
     | _ -> 
         let (fields, is_valid) = List.fold_left (tc_struct_field_def env) ([], true) fields in
         match is_valid with
-        | true -> update_entry id (StructDef fields) env
+        | true -> add_entry id (StructDef fields) env
         | false -> failwith "Generic Error"
 
 (* Type Check function declaration: { typ : Ast.typ; fname : string; formals : (Ast.typ * Ast.identifier) list; body : Ast.stmt; } *)
@@ -288,7 +288,7 @@ and tc_func_def env (id, ret_typ, formals, body) =
     let (formals, is_valid) = List.fold_left (tc_func_param_def env) ([], is_valid) formals in
     let formal_types = List.map (fun (typ, _) -> typ) formals in
     match is_valid with
-    | true -> update_entry id (FunDef (ret_typ, formal_types)) env
+    | true -> add_entry id (FunDef (ret_typ, formal_types)) env
     | false -> failwith "Generic Error"
 
 and make_default_env =

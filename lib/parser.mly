@@ -193,7 +193,7 @@ let fundecl :=
       typ = t;
       fname = fname;
       formals = args;
-      body = { annotate (Block []) $startpos $endpos };
+      body = annotate (Block []) $startpos $endpos;
     }
   }
 | t = typ; fname = IDENT; LPAREN; args = funargs; RPAREN; body = block;
@@ -426,10 +426,29 @@ let rexpr_no_comma :=
 | l = expr_no_comma; SHIFT_LEFT; r = expr_no_comma; { binOp Shift_Left l r $startpos $endpos }
 | l = expr_no_comma; SHIFT_RIGHT; r = expr_no_comma; { binOp Shift_Right l r $startpos $endpos }
 
-| INCREMENT; e = expr_no_comma; { unOp Pre_Incr e $startpos $endpos } %prec PRE_INCR_DECR
-| DECREMENT; e = expr_no_comma; { unOp Pre_Decr e $startpos $endpos } %prec PRE_INCR_DECR
-| e = expr_no_comma; INCREMENT; { unOp Post_Incr e $startpos $endpos } %prec POST_INCR_DECR
-| e = expr_no_comma; DECREMENT; { unOp Post_Decr e $startpos $endpos } %prec POST_INCR_DECR
+| INCREMENT; e = lexpr;
+  {
+    let one_expr = annotate (ILiteral 1) $startpos $endpos in
+    assignBinOp e one_expr Add $startpos $endpos 
+  } %prec PRE_INCR_DECR
+| DECREMENT; e = lexpr;
+  { 
+    let one_expr = annotate (ILiteral 1) $startpos $endpos in
+    assignBinOp e one_expr Sub $startpos $endpos
+  } %prec PRE_INCR_DECR
+
+| e = lexpr; INCREMENT;
+  {
+    let one_expr = annotate (ILiteral 1) $startpos $endpos in
+    let incr = assignBinOp e one_expr Add $startpos $endpos in
+    binOp Sub incr one_expr $startpos $endpos
+  } %prec POST_INCR_DECR
+| e = lexpr; DECREMENT;
+  { 
+    let one_expr = annotate (ILiteral 1) $startpos $endpos in
+    let decr = assignBinOp e one_expr Sub $startpos $endpos in
+    binOp Add decr one_expr $startpos $endpos
+  } %prec POST_INCR_DECR
 
 | SIZEOF; t = adv_typ; { annotate (SizeOf t) $startpos $endpos }
 
@@ -475,10 +494,29 @@ let rexpr :=
 | l = expr; SHIFT_LEFT; r = expr; { binOp Shift_Left l r $startpos $endpos }
 | l = expr; SHIFT_RIGHT; r = expr; { binOp Shift_Right l r $startpos $endpos }
 
-| INCREMENT; e = expr; { unOp Pre_Incr e $startpos $endpos } %prec PRE_INCR_DECR
-| DECREMENT; e = expr; { unOp Pre_Decr e $startpos $endpos } %prec PRE_INCR_DECR
-| e = expr; INCREMENT; { unOp Post_Incr e $startpos $endpos } %prec POST_INCR_DECR
-| e = expr; DECREMENT; { unOp Post_Decr e $startpos $endpos } %prec POST_INCR_DECR
+| INCREMENT; e = lexpr;
+  {
+    let one_expr = annotate (ILiteral 1) $startpos $endpos in
+    assignBinOp e one_expr Add $startpos $endpos 
+  } %prec PRE_INCR_DECR
+| DECREMENT; e = lexpr;
+  { 
+    let one_expr = annotate (ILiteral 1) $startpos $endpos in
+    assignBinOp e one_expr Sub $startpos $endpos
+  } %prec PRE_INCR_DECR
+
+| e = lexpr; INCREMENT;
+  {
+    let one_expr = annotate (ILiteral 1) $startpos $endpos in
+    let incr = assignBinOp e one_expr Add $startpos $endpos in
+    binOp Sub incr one_expr $startpos $endpos
+  } %prec POST_INCR_DECR
+| e = lexpr; DECREMENT;
+  { 
+    let one_expr = annotate (ILiteral 1) $startpos $endpos in
+    let decr = assignBinOp e one_expr Sub $startpos $endpos in
+    binOp Add decr one_expr $startpos $endpos
+  } %prec POST_INCR_DECR
 
 | SIZEOF; t = adv_typ; { annotate (SizeOf t) $startpos $endpos }
 
