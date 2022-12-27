@@ -11,8 +11,6 @@ type binop =
 type uop =
   | Pos | Neg
   | Bit_Not | Not
-  | Pre_Incr | Pre_Decr
-  | Post_Incr | Post_Decr
 [@@deriving show]
 type identifier = string [@@deriving show]
 
