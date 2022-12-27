@@ -5,7 +5,8 @@ open Symbol_table
 
 type typ =
     | Int | Float | Bool | Char | Void | Ptr of typ | Array of typ
-    | Funct of Ast.identifier | Struct of Ast.identifier
+    (* | Funct of Ast.identifier *)
+    | Struct of Ast.identifier
 type symbol =
     | StructDef of (typ * Ast.identifier) list
     | FunDef of typ * (typ) list
@@ -13,7 +14,7 @@ type symbol =
 
 let rec is_type_valid typ env =
     match typ with
-    | Funct(id) -> Option.is_some (lookup_opt id env)
+    (* | Funct(id) -> Option.is_some (lookup_opt id env) *)
     | Struct(id) -> Option.is_some (lookup_opt id env)
     | Ptr(typ) -> is_type_valid typ env
     | Array(typ) -> is_type_valid typ env
@@ -207,18 +208,46 @@ let rec tc_stmt_or_decl env stmt_or_decl =
 (* Type Check statement nodes: Ast.stmt *)
 and tc_stmt env stmt =
     match stmt.node with
-    | If(guard, then_stmt, else_stmt) -> env (* TEMPORARY *)
-    | While(guard, stmt) -> env (* TEMPORARY *)
-    | Expr(expr) -> env (* TEMPORARY *)
-    | Return(expr) -> env (* TEMPORARY *)
-    | Block(stmts) -> env (* TEMPORARY *)
+    | If(guard, then_stmt, else_stmt) -> (
+        let (env, guard_typ) = tc_expr env guard in
+        match guard_typ with
+        | Bool ->
+            let (env, _) = tc_stmt env then_stmt in
+            let (env, _) = tc_stmt env else_stmt in
+            (env, Void)
+        | _ -> failwith "If guard expression type must be a boolean"
+    )
+    | While(guard, stmt) -> (
+        let (env, guard_typ) = tc_expr env guard in
+        match guard_typ with
+        | Bool -> 
+            let (env, _) = tc_stmt env stmt in
+            (env, Void)
+        | _ -> failwith "While guard expression type must be a boolean"
+    )
+    | Expr(expr) ->
+        let (env, _) = tc_expr env expr in
+        (env, Void)
+    | Return(expr) -> (
+        match expr with
+        | Some(expr) -> tc_expr env expr
+        | None -> (env, Void)
+    )
+    | Block(stmts) -> (
+        let check_stmt (env, ret_typ) stmt =
+            match ret_typ with
+            | Void -> tc_stmt_or_decl env stmt
+            | _ -> (env, ret_typ)
+        in
+        let env = begin_block env in
+        let (env, typ) = List.fold_left check_stmt (env, Void) stmts in
+        (end_block env, typ)
+    )
 
 (* Type Check local variable declaration: Ast.stmtordecl -> Dec of Ast.typ * Ast.identifier *)
 and tc_local_decl env (typ, id) =
     let type_id = ast_type_to_typ typ in
-    add_entry id (VarDef type_id) env
-
-
+    (add_entry id (VarDef type_id) env, type_id)
 
 (* Type Check whole program declaration: Ast.program *)
 let rec tc_program program = 
@@ -232,10 +261,81 @@ let rec tc_program program =
         | StructDecl(id, fields) ->
             tc_struct_def env (id, fields)
     in
-    (* Program declarations must be reordered to remove the definitions without body *)
-    failwith "FIX THIS ISSUE FIRST"
-    (* match program with
-    | Prog(decls) -> List.fold_left tc_topdecl make_default_env decls *)
+    match program with
+    | Prog(decls) ->
+        let decls = remove_forward_declarations decls in
+        List.fold_left tc_topdecl make_default_env decls
+
+and remove_forward_declarations decls =
+    let rec fix_decls decls new_decls =
+        match decls with
+        | [] -> new_decls
+        | hd::tl -> (
+            let new_decls = match hd.node with
+            | Vardec(_, _, _) -> hd :: new_decls
+            | StructDecl(id, fields) -> (
+                let rec lookup_decl id new_decls accum =
+                    match new_decls with
+                    | [] -> (List.rev accum, None, [])
+                    | hd::tl -> (
+                        match hd.node with
+                        | StructDecl(str_id, _) -> (
+                            match id = str_id with
+                            | true -> (List.rev accum, Some(hd), tl)
+                            | false -> lookup_decl id tl (hd::accum)
+                        )
+                        | _ -> lookup_decl id tl (hd::accum)
+                    )
+                in
+                let (prec, def, next) = lookup_decl id new_decls [] in
+                let def = match def with Some({ node = node; _ }) -> Some(node) | None -> None in
+                match (def, fields) with
+                | (Some(StructDecl(_, [])), _::_) -> prec @ ( hd :: next )
+                | (None, _) -> hd :: prec
+                | (Some(_), _) -> failwith "Struct already defined"
+            )
+            | Fundecl(decl) -> (
+                let {typ = ret_typ; fname = fname; formals = formals; body = body } = decl in
+                let rec lookup_decl id new_decls accum =
+                    match new_decls with
+                    | [] -> (List.rev accum, None, [])
+                    | hd::tl -> (
+                        match hd.node with
+                        | Fundecl({ fname = fname; _ }) -> (
+                            match id = fname with
+                            | true -> (List.rev accum, Some(hd), tl)
+                            | false -> lookup_decl id tl (hd::accum)
+                        )
+                        | _ -> lookup_decl id tl (hd::accum)
+                    )
+                in
+                let formals_match formals def_formals =
+                    let formal_match valid l r =
+                        match valid with
+                        | true -> l = r
+                        | false -> false
+                    in
+                    List.fold_left2 formal_match true formals def_formals
+                in 
+                let (prec, def, next) = lookup_decl fname new_decls [] in
+                let def = match def with Some({ node = node; _ }) -> Some(node) | None -> None in
+                match def with
+                | Some(Fundecl({typ = def_ret_typ; formals = def_formals; body = def_body; _ })) -> (
+                    match (ret_typ = def_ret_typ, formals_match formals def_formals, body.node, def_body.node) with
+                    | ( true, true, Block(_::_), Block([]) ) -> prec @ ( hd :: next )
+                    | ( true, true, Block([]), Block([]) ) -> failwith "Function already declared"
+                    | ( true, true, _, _ ) -> failwith "Function already defined"
+                    | ( false, _, _, _ ) -> failwith "Function return type does not match"
+                    | ( _, false, _, _ ) -> failwith "Function parameters do not match"
+                )
+                | (Some(_)) -> failwith "Error not expected"
+                | None -> hd :: prec
+            )
+            in
+            fix_decls tl new_decls
+        )
+    in
+    fix_decls decls []
 
 (* Type Check variable declaration: Ast.typ * Ast.identifier * Ast.expr option *)
 and tc_var_decl env (typ, id, expr) =
@@ -288,8 +388,20 @@ and tc_func_def env (id, ret_typ, formals, body) =
     let (formals, is_valid) = List.fold_left (tc_func_param_def env) ([], is_valid) formals in
     let formal_types = List.map (fun (typ, _) -> typ) formals in
     match is_valid with
-    | true -> add_entry id (FunDef (ret_typ, formal_types)) env
-    | false -> failwith "Generic Error"
+    | true -> (
+        let add_formals_to_env env (typ, id) =
+            add_entry id (VarDef(typ)) env
+        in
+        let env = add_entry id (FunDef (ret_typ, formal_types)) env in
+        let env = begin_block env in
+        let env = List.fold_left add_formals_to_env env formals in
+        let (env, block_ret_typ) = (tc_stmt env body) in
+        let env = end_block env in
+        match ret_typ = block_ret_typ with
+        | true -> env
+        | false -> failwith "Function return type does not match"
+    )
+    | false -> failwith "Function formal parameters are incorrect"
 
 and make_default_env =
     empty_table |>
@@ -298,5 +410,17 @@ and make_default_env =
 
 (* Type Check whole program declaration: Ast.program *)
 let type_check program = 
-    let _ = tc_program program in
-    program
+    let env = tc_program program in
+    match lookup_opt "main" env with
+    | Some(FunDef(ret_typ, arg_def_types)) -> (
+        let _ = match ret_typ with
+            | Int | Void -> true
+            | _ -> failwith "Main function return type must be void or int"
+        in
+        let _ = match arg_def_types with
+            | [] -> true
+            | _ -> failwith "Main function has no formal parameters"
+        in
+        program
+    )
+    | _ -> failwith "Main function is not defined"
