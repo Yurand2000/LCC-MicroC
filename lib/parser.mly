@@ -140,8 +140,7 @@ let topdecl :=
 
 /* returns: identifier * (typ * identifier) list */
 let structdecl :=
-| STRUCT; name = IDENT; SEMICOLON; { (name, []) }
-| STRUCT; name = IDENT; LBRACE; fields = structFields; RBRACE; SEMICOLON; { (name, fields) }
+| STRUCT; name = IDENT; LBRACE; fields = structFields; RBRACE; { (name, fields) }
 
 /* returns: (typ * identifier) list */
 let structFields :=
@@ -187,15 +186,6 @@ let vardesc :=
 
 /* returns: fun_decl */
 let fundecl :=
-| t = typ; fname = IDENT; LPAREN; args = funargs; RPAREN; SEMICOLON;
-  {
-    {
-      typ = t;
-      fname = fname;
-      formals = args;
-      body = annotate (Block []) $startpos $endpos;
-    }
-  }
 | t = typ; fname = IDENT; LPAREN; args = funargs; RPAREN; body = block;
   {
     {
