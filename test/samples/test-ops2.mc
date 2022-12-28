@@ -21,5 +21,6 @@ int main()
   printb(!false);
   printb(!true);
   print(-10);
-  print(--42);
+  print(--42); //-- is the decrement operator here
+  return 0;
 }

@@ -20,7 +20,7 @@ let special_chars = "\\'" | "\\b" | "\\f" | "\\t" | "\\\\" | "\\r" | "\\n"
 let chars = [^ '\'' '\b' '\t' '\\' '\r' '\n' ]
 let str_special_chars = "\\\"" | "\\b" | "\\f" | "\\t" | "\\\\" | "\\r" | "\\n"
 let str_chars = [^ '\"' '\b' '\t' '\\' '\r' '\n' ]
-let whitespace = ' ' | '\t' | '\n' | '\r'
+let whitespace = ' ' | '\t' | '\r'
 
 (* Identifier Regular Expression *)
 let ident = ('_' | letters )('_' | letters | digits)*
@@ -66,6 +66,7 @@ let bool = "true" | "false"
 rule next_token = parse
     (* Whitespaces -> Do Nothing *)
     | whitespace { next_token lexbuf }
+    | '\n' { Lexing.new_line lexbuf; next_token lexbuf }
 
     (* Keywords *)
     | "if" { IF }
@@ -88,12 +89,12 @@ rule next_token = parse
     (* Operators *)
     | '=' { ASSIGN }
     | '+' { PLUS }
+    | "++" { INCREMENT }
+    | "--" { DECREMENT }
     | '-' { MINUS }
     | '*' { TIMES }
     | '/' { DIV }
     | '%' { MOD }
-    | "++" { INCREMENT }
-    | "--" { DECREMENT }
 
     | "==" { EQ }
     | "!=" { NEQ }
@@ -176,11 +177,12 @@ rule next_token = parse
     | "/*" { multi_line_comment lexbuf }
 
     (* Unknown Token *)
-    | _ { raise (Lexing_error (to_lexeme_position lexbuf, "Syntax Error. ")) }
+    | _ as char { raise (Lexing_error (to_lexeme_position lexbuf, "Syntax Error, found symbol(s): \"" ^ (String.make 1 char) ^ "\".")) }
 
 and single_line_comment = parse
-    | '\n' { next_token lexbuf }
+    | '\n' { Lexing.new_line lexbuf; next_token lexbuf }
     | _ { single_line_comment lexbuf }
 and multi_line_comment = parse
     | "*/" { next_token lexbuf }
+    | '\n' { Lexing.new_line lexbuf; multi_line_comment lexbuf }
     | _ { multi_line_comment lexbuf }
