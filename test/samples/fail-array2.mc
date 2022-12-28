@@ -1,4 +1,4 @@
-int b[5][2];
+int b[5][0];
 
 int main(){
     return 0;

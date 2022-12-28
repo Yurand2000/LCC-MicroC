@@ -20,4 +20,12 @@
   (libraries microc llvm)
   (modules codegen_test)
   (preprocess
-  (pps ppx_deriving.show ppx_deriving.ord ppx_deriving.eq)))    
+  (pps ppx_deriving.show ppx_deriving.ord ppx_deriving.eq)))
+
+(executable
+  (name automatic_tests)
+  (public_name automatic_tests)
+  (libraries microc llvm)
+  (modules automatic_tests)
+  (preprocess
+  (pps ppx_deriving.show ppx_deriving.ord ppx_deriving.eq)))

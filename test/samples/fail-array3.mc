@@ -1,4 +1,4 @@
-int foo(int a[][], int i, int j){
+int[] foo(int a[][][], int i, int j){
     return a[i][j];
 }
 
