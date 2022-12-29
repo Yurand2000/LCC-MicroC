@@ -229,7 +229,7 @@ and tc_un_op env tc_fn op expr loc =
     match op with
     | Pos | Neg -> (
         match expr_type with
-        | Int | Float | Char | Ptr(_) -> (env, expr_type)
+        | Int | Float | Char -> (env, expr_type)
         | _ -> raise_un_op_error loc op expr_type
     )
     | Bit_Not -> (
@@ -272,18 +272,18 @@ and tc_bin_op env tc_fn op lexpr rexpr loc =
     )
     | Mult | Div -> (
         match (ltype, rtype) with
-        | (Int, Int) | (Float, Float) | (Char, Char) -> (env, ltype)
+        | (Int, Int) | (Float, Float) -> (env, ltype)
         | _ -> raise_bin_op_error loc op ltype rtype
     )
     | Mod -> (
         match (ltype, rtype) with
-        | (Int, Int) | (Char, Char) -> (env, ltype)
+        | (Int, Int) -> (env, ltype)
         | _ -> raise_bin_op_error loc op ltype rtype
     )
     | Bit_And | Bit_Or | Bit_Xor
     | Shift_Left | Shift_Right -> (
         match (ltype, rtype) with
-        | (Int, Int) | (Char, Char) -> (env, ltype)
+        | (Int, Int) -> (env, ltype)
         | _ -> raise_bin_op_error loc op ltype rtype
     )
     | And | Or -> (
