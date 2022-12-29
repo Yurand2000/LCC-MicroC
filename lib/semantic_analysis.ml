@@ -118,23 +118,33 @@ let rec tc_expr env expr =
     | Addr(access) ->
         let (env, access_type) = tc_access env access in
         (env, Ptr access_type)
+    | UnaryOp(op, expr) -> tc_un_op env tc_expr op expr loc
+    | BinaryOp(op, lexpr, rexpr) -> tc_bin_op env tc_expr op lexpr rexpr loc
+    | CommaOp(lexpr, rexpr) -> 
+        let (lenv, _) = tc_expr env lexpr in
+        tc_expr lenv rexpr
+    | Call(id, args) -> tc_fn_call env id args loc
+    | ILiteral(_) | FLiteral(_) | CLiteral(_)
+    | BLiteral(_) | SLiteral(_) | SizeOf(_) ->
+        tc_const_expr env expr
+and tc_const_expr env expr =
+    let loc = expr.loc in
+    match expr.node with
     | ILiteral(value) -> (
         match is_int_literal_valid value with
         | true -> (env, Int)
-        | false -> raise (Semantic_error(expr.loc,"Integer literal is out of range."))
+        | false -> raise (Semantic_error(loc,"Integer literal is out of range."))
     )
     | FLiteral(_) -> (env, Float)
     | CLiteral(_) -> (env, Char)
     | BLiteral(_) -> (env, Bool)
     | SLiteral(_) -> (env, Ptr Char)
-    | UnaryOp(op, expr) -> tc_un_op env op expr loc
-    | BinaryOp(op, lexpr, rexpr) -> tc_bin_op env op lexpr rexpr loc
-    | CommaOp(lexpr, rexpr) -> 
-        let (lenv, _) = tc_expr env lexpr in
-        tc_expr lenv rexpr
-    | Call(id, args) -> tc_fn_call env id args loc
     | SizeOf(_) -> (env, Int)
-
+    | Access(access) -> tc_const_access env access
+    | Addr(access) -> tc_const_access env access
+    | UnaryOp(op, expr) -> tc_un_op env tc_const_expr op expr loc
+    | BinaryOp(op, lexpr, rexpr) -> tc_bin_op env tc_const_expr op lexpr rexpr loc
+    | _ -> raise (Semantic_error(loc, "Given expression of type cannot be const evaluated."))
 and is_int_literal_valid value =
     (value <= 2147483647) && (value >= -2147483648)
     
@@ -174,6 +184,16 @@ and tc_access env access =
         | typ -> raise (Semantic_error(loc, "Arrow operator requires a pointer to struct type"
         ^ "The expression type is: \"" ^ show_typ typ ^ "\"."))
     )
+and tc_const_access env access =
+    let loc = access.loc in
+    match access.node with
+    | AccVar(id) -> (env, lookup_var_type env id (Some(loc)))
+    | AccDeref(expr) -> (
+        match expr.node with
+        | Addr(access) -> tc_const_access env access
+        | _ -> raise (Semantic_error(expr.loc, "Given access expression cannot be const evaluated."))
+    )
+    | _ -> raise (Semantic_error(loc, "Given access expression cannot be const evaluated."))
 and search_field_in_struct env str_id field loc =
     let fields = lookup_struct_def env str_id (Some(loc)) in
     let field_has_name name (_, id) = (id = name) in
@@ -204,8 +224,8 @@ and tc_fn_args env args =
     List.fold_left_map tc_expr env args
 
 (* Type Check unary operation expression *)
-and tc_un_op env op expr loc =
-    let (env, expr_type) = tc_expr env expr in
+and tc_un_op env tc_fn op expr loc =
+    let (env, expr_type) = tc_fn env expr in
     match op with
     | Pos | Neg -> (
         match expr_type with
@@ -227,9 +247,9 @@ and raise_un_op_error loc op typ =
         "\"cannot be applied to the expression of type \"" ^ show_typ typ ^ "\".")) 
 
 (* Type Check binary operation expression *)
-and tc_bin_op env op lexpr rexpr loc =
-    let (env, ltype) = tc_expr env lexpr in
-    let (env, rtype) = tc_expr env rexpr in
+and tc_bin_op env tc_fn op lexpr rexpr loc =
+    let (env, ltype) = tc_fn env lexpr in
+    let (env, rtype) = tc_fn env rexpr in
     match op with
     | Add -> (
         match (ltype, rtype) with
@@ -508,7 +528,7 @@ and tc_var_decl env (var_typ, id, expr) loc =
     | (true, true) -> (
         match expr with
         | Some(expr) -> (
-            let (env, expr_typ) = tc_expr env expr in
+            let (env, expr_typ) = tc_const_expr env expr in
             match are_types_equal expr_typ var_typ with
             | true -> add_entry id (VarDef var_typ) env
             | false -> raise (Semantic_error(loc, "Initializer expression for global variable does not match variable type. "
