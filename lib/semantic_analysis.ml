@@ -5,7 +5,6 @@ open Symbol_table
 
 type typ =
     | Int | Float | Bool | Char | Void | Ptr of typ | Array of typ * int option
-    (* | Funct of Ast.identifier *)
     | Struct of Ast.identifier
 
 let rec show_typ typ =
@@ -26,23 +25,25 @@ type symbol =
 
 let rec is_valid_type typ env =
     match typ with
-    (* | Funct(id) -> Option.is_some (lookup_opt id env) *)
     | Struct(id) -> Option.is_some (lookup_opt id env)
     | Ptr(typ) -> is_valid_type typ env
-    | Array(typ, _) -> is_valid_type typ env
+    | Array(typ, size) ->
+        (Option.fold ~none:true ~some:(fun s -> s > 0) size) &&
+        (is_valid_type typ env)
     | _ -> true
 and is_valid_variable_type typ _env =
     match typ with
     | Void -> false
     | Array(typ, size) -> (
-        match Option.fold ~none:false ~some:(fun s -> s > 0) size with
-        | true -> is_valid_variable_type typ _env
-        | false -> false
+        (Option.fold ~none:true ~some:(fun s -> s > 0) size) &&
+        (is_valid_variable_type typ _env)
     )
+    | Ptr(typ) -> is_valid_parameter_type typ _env
     | _ -> true
 and is_valid_return_type typ _env =
     match typ with
     | Array(_) -> false
+    | Ptr(typ) -> is_valid_parameter_type typ _env
     | _ -> true
 and is_valid_parameter_type typ _env =
     match typ with
@@ -52,6 +53,7 @@ and is_valid_parameter_type typ _env =
         | true -> is_valid_parameter_type typ _env
         | false -> false
     )
+    | Ptr(typ) -> is_valid_parameter_type typ _env
     | _ -> true
 and is_valid_lexpr_type typ _env =
     match typ with

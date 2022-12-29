@@ -62,7 +62,7 @@ and load_file file =
 and test_input_file is_success_test (fname, source)  =
   let lexbuf = Lexing.from_string ~with_positions:true source in 
   try
-    let _ =
+    let ast =
       lexbuf |>
       Parsing.parse Scanner.next_token |>
       Semantic_analysis.type_check
@@ -71,7 +71,8 @@ and test_input_file is_success_test (fname, source)  =
     | true ->  ()
     | false -> 
       print_long_line ();
-      Printf.eprintf "Test \"%s\" failed, failure expected but was not found.\n\n" fname
+      Printf.eprintf "Test \"%s\" failed, failure expected but was not found.\n\n" fname;
+      Printf.eprintf "Test \"%s\" abstract sintax tree:\n%s" fname (Ast.show_program ast)
   with 
   | Scanner.Lexing_error (pos, msg)
   | Parsing.Syntax_error (pos, msg) -> (
