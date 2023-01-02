@@ -240,11 +240,11 @@ and cg_if_stmt (ctx, bld) (typs, env) guard then_stmt else_stmt = (* Code genera
     | (true, true) -> env
     | _ -> (
         let cnt_bb = Llvm.append_block ctx "if_cnt" fn in
-        let _ = if tbranch_returns then (
+        let _ = if Bool.not tbranch_returns then (
             let _ = Llvm.position_at_end then_bb bld in
             let _ = Llvm.build_br cnt_bb bld in ()
         ) else () in
-        let _ = if ebranch_returns then (
+        let _ = if Bool.not ebranch_returns then (
             let _ = Llvm.position_at_end else_bb bld in
             let _ = Llvm.build_br cnt_bb bld in ()
         ) else () in
@@ -289,7 +289,9 @@ and is_return_present stmt = (* Check if all paths lead to a return statement *)
             let is_return_in_block previous stmt_or_dec =
                 previous && (is_return_in_stmt_or_dec stmt_or_dec)
             in
-            List.fold_left is_return_in_block true stmts
+            match stmts with
+            | [] -> false
+            | _ -> List.fold_left is_return_in_block true stmts
         )
     and is_return_in_stmt_or_dec stmt_or_dec =
         match stmt_or_dec.node with

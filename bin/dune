@@ -1,4 +1,4 @@
 (executable
  (public_name microcc)
  (name microcc)
- (libraries microc llvm llvm.bitwriter))
+ (libraries microc llvm llvm.bitwriter llvm.irreader llvm.target llvm.linker llvm.all_backends))
