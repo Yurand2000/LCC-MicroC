@@ -1,4 +1,5 @@
 exception DuplicateEntry of Ast.identifier
+exception EntryNotFound of Ast.identifier
 
 type 'a t = ((Ast.identifier * 'a) list) list
 
@@ -14,7 +15,7 @@ let end_block env =
     match env with
     | _::snd::tl -> snd::tl
     | _::_ -> failwith "Cannot remove global scope from environment table!"
-    | [] -> failwith "Environment table cannot be empty!"
+    | [] -> failwith "Cannot close scope: environment table is empty!"
 
 let add_entry id def env =
     let (hd, tl) = (List.hd env, List.tl env) in
@@ -34,7 +35,7 @@ let rec lookup_opt id env =
 let lookup id env = 
     match lookup_opt id env with
     | Some(res) -> res
-    | None -> failwith "Entry not found"
+    | None -> raise (EntryNotFound id)
 
 let of_alist list = 
     let add_to_env env (id, def) =

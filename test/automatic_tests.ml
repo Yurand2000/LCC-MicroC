@@ -14,6 +14,7 @@ let read_args =
   (!input_dir, !ext)
 
 let rec main () =
+  print_empty_line ();
   let (input_dir, ext) = read_args in
   let _ = if Sys.file_exists input_dir then () else failwith ("\"" ^ input_dir ^ "\" does not exist!") in
   let test_files = match (Sys.is_directory input_dir) with
@@ -62,34 +63,62 @@ and load_file file =
 and test_input_file is_success_test (fname, source)  =
   let lexbuf = Lexing.from_string ~with_positions:true source in 
   try
+    Printf.eprintf "Testing \"%s\" ... " fname;
+    Stdlib.flush stderr;
     let ast =
       lexbuf |>
       Parsing.parse Scanner.next_token |>
       Semantic_analysis.type_check
     in
+    let llmodule = Codegen.to_llvm_module ast in
+    let msg = Llvm_analysis.verify_module llmodule in
+    let _ = match msg with
+    | Some(msg) -> raise (Codegen.Unexpected_error msg)
+    | None -> ()
+    in
+    print_empty_line ();
     match is_success_test with
-    | true ->  ()
-    | false -> 
+    | true -> ();
+    | false ->
       print_long_line ();
       Printf.eprintf "Test \"%s\" failed, failure expected but was not found.\n\n" fname;
       Printf.eprintf "Test \"%s\" abstract sintax tree:\n%s" fname (Ast.show_program ast)
   with 
   | Scanner.Lexing_error (pos, msg)
   | Parsing.Syntax_error (pos, msg) -> (
+    print_empty_line (); 
     match is_success_test with
     | true -> handle_syntatic_error fname source pos msg
     | false -> ()
   )
   | Semantic_analysis.Semantic_error (pos, msg) -> (
+    print_empty_line (); 
     match is_success_test with
     | true -> handle_semantic_error fname source pos msg
     | false -> ()
   )
   | Symbol_table.DuplicateEntry (entry) -> (
+    print_empty_line (); 
+    match is_success_test with
+    | true ->
+      print_long_line ();
+      Printf.eprintf "Test \"%s\" failed:\n*** Duplicate entry detected: %s\n\n" fname entry
+    | false -> ()    
+  )
+  | Symbol_table.EntryNotFound (entry) -> (
+    print_empty_line (); 
     match is_success_test with
     | true -> 
       print_long_line ();
-      Printf.eprintf "Test \"%s\" failed:\n*** Duplicate entry detected: %s\n\n" fname entry
+      Printf.eprintf "Test \"%s\" failed:\n*** Entry not found in table: %s\n\n" fname entry
+    | false -> ()    
+  )
+  | Codegen.Unexpected_error (msg) -> (
+    print_empty_line (); 
+    match is_success_test with
+    | true -> 
+      print_long_line ();
+      Printf.eprintf "Test \"%s\" failed:\n*** Codegen Error: %s\n\n" fname msg
     | false -> ()    
   )
 
@@ -128,5 +157,7 @@ and handle_semantic_error fname source code_pos msg =
 
 and print_long_line () =
     Printf.eprintf "----------------------------------------------------------\n"
+and print_empty_line () =
+    Printf.eprintf "\r                                                        \r"
 
 let () = main ()

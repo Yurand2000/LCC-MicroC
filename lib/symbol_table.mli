@@ -1,4 +1,5 @@
 exception DuplicateEntry of Ast.identifier
+exception EntryNotFound of Ast.identifier
 
 type 'a t 
 
