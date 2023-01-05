@@ -42,3 +42,6 @@ let of_alist list =
         add_entry id def env
     in
     List.fold_left add_to_env empty_table list
+
+let to_alist table =
+    List.flatten table

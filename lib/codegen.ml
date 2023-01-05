@@ -93,6 +93,8 @@ and get_array_type typs typ sizes =
     List.fold_left array_of_size lltype sizes
 and lookup_type id typs =
     fst (lookup id typs)
+and lookup_struct_fields struct_id typs =
+    to_alist (snd (lookup struct_id typs))
 and lookup_struct_field struct_id field_id typs =
     let fields = snd (lookup struct_id typs) in
     let (field_index, field_typ) = lookup field_id fields in
@@ -161,11 +163,45 @@ and cg_global_var (ctx, md) (typs, env) (typ, id, expr) =
     )
     | None -> (
         let typ = get_local_typ typ in
-        let lltype = get_llvm_type typs typ in
-        let var = Llvm.declare_global lltype id md in
+        let default = cg_default_value typs typ in
+        let var = Llvm.define_global id default md in
+        let _ = Llvm.set_externally_initialized false var in
         let env = add_entry id (var, Ptr(typ)) env in
         (typs, env)
     )
+and cg_default_value typs typ =
+    match typ with
+    | Int -> Llvm.const_int (get_llvm_int typs) 0
+    | Float -> Llvm.const_float (get_llvm_float typs) 0.0
+    | Bool -> Llvm.const_int (get_llvm_bool typs) 0
+    | Char -> Llvm.const_int (get_llvm_char typs) 0
+    | Void -> raise (sem_error "Void cannot have values." Location.dummy_code_pos)
+    | Struct(id) -> (
+        let lltype = lookup_type id typs in
+        let fields = lookup_struct_fields id typs in
+        let initialize_field (_, (curr_index, typ)) =
+            (curr_index, cg_default_value typs typ)
+        in
+        let sort_fields (lindex, _) (rindex, _) =
+            Stdlib.compare lindex rindex
+        in
+        let fields = List.map initialize_field fields in
+        let fields = List.sort sort_fields fields in
+        let fields = List.map snd fields in
+        Llvm.const_named_struct lltype (Array.of_list fields)
+    )
+    | Ptr(_) -> Llvm.const_pointer_null (get_llvm_type typs typ)
+    | Array(inner_typ, sizes) ->
+        let lltype = get_llvm_type typs inner_typ in
+        let llvalue = cg_default_value typs inner_typ in
+        let make_def_array size (value, typ) =
+            let array_type = Llvm.array_type typ size in
+            let array_values = List.init size (fun _ -> value) in
+            (Llvm.const_array typ (Array.of_list array_values), array_type)
+        in
+        fst (List.fold_right make_def_array sizes (llvalue, lltype))
+    | ArrayRef(_) ->
+        Llvm.const_pointer_null (get_llvm_type typs typ)
 
 (* Generate code for Struct declaration *)
 and cg_struct_decl (ctx, _md) (typs, env) (id, fields) =

@@ -44,3 +44,11 @@ watch: ## Watch for the filesystem and rebuild on every change
 .PHONY: utop
 utop: ## Run a REPL and link with the project's libraries
 	opam exec -- dune utop --root . lib -- -implicit-bindings
+
+.PHONY: testall
+testall: all ## Run testall.sh script with correct arguments
+	./test/testall.sh ./_build/default/bin/microcc.exe ./test/samples/ ./test/compile/ ./bin/rt-support.c
+
+.PHONY: testclean
+testclean: testall
+	rm -r ./test/compile/

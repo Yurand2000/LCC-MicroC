@@ -10,3 +10,4 @@ val add_entry : Ast.identifier -> 'a -> 'a t -> 'a t
 val lookup : Ast.identifier -> 'a t -> 'a
 val lookup_opt : Ast.identifier -> 'a t -> 'a option
 val of_alist : (Ast.identifier * 'a) list -> 'a t 
+val to_alist : 'a t -> (Ast.identifier * 'a) list

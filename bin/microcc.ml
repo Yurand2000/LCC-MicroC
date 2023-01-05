@@ -33,7 +33,6 @@ and compile_files files optimize verify_module =
         let buffer = make_buffer filename in
         try
             let llmodule = compile_file buffer optimize verify_module in
-            let _ = Printf.printf "File %s successfully compiled!\n" filename in
             (filename, llmodule)
         with
         | Scanner.Lexing_error (pos, msg) | Parsing.Syntax_error (pos, msg) ->
@@ -203,7 +202,7 @@ let () =
                     if !link then
                         try_linking object_files !rt_support output_file;
                 with
-                | Failure(_) -> ()
+                | Failure(_) -> ignore(exit 1);
             )
             | _ -> (
                 let source = List.hd !input_files in
@@ -223,9 +222,9 @@ let () =
                     | _ -> failwith "Unexpected Error"
                 with
                 | Scanner.Lexing_error (pos, msg) | Parsing.Syntax_error (pos, msg) ->
-                    handle_syntatic_error source pos msg;
+                    handle_syntatic_error source pos msg; ignore(exit 1);
                 | Semantic_analysis.Semantic_error (pos, msg) ->
-                    handle_semantic_error source pos msg;
+                    handle_semantic_error source pos msg; ignore(exit 1);
 
                 if List.length !input_files > 1 then
                     Printf.printf "*** Warning! Only the first file is used for this option\n\n";
