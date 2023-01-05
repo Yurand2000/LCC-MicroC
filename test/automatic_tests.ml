@@ -73,7 +73,7 @@ and test_input_file is_success_test (fname, source)  =
     let llmodule = Codegen.to_llvm_module ast in
     let msg = Llvm_analysis.verify_module llmodule in
     let _ = match msg with
-    | Some(msg) -> raise (Codegen.Unexpected_error msg)
+    | Some(msg) -> raise (Codegen.Unexpected_error(Location.dummy_code_pos, msg ^ "\n\n" ^ (Llvm.string_of_llmodule llmodule) ))
     | None -> ()
     in
     print_empty_line ();
@@ -113,12 +113,12 @@ and test_input_file is_success_test (fname, source)  =
       Printf.eprintf "Test \"%s\" failed:\n*** Entry not found in table: %s\n\n" fname entry
     | false -> ()    
   )
-  | Codegen.Unexpected_error (msg) -> (
+  | Codegen.Unexpected_error (code_pos, msg) -> (
     print_empty_line (); 
     match is_success_test with
     | true -> 
       print_long_line ();
-      Printf.eprintf "Test \"%s\" failed:\n*** Codegen Error: %s\n\n" fname msg
+      handle_codegen_error fname code_pos msg
     | false -> ()    
   )
 
@@ -154,6 +154,10 @@ and handle_semantic_error fname source code_pos msg =
     print_long_line ();
     Printf.eprintf "Test \"%s\" failed:\n*** Error at lines %d-%d.\n%s\n*** %s\n\n"
       fname code_pos.Location.start_line (code_pos.Location.start_line + 5) text msg
+
+and handle_codegen_error fname code_pos msg =
+  Printf.eprintf "Test \"%s\" failed:\n*** Codegen Error at lines %d-%d: %s\n\n"
+    fname code_pos.Location.start_line code_pos.Location.end_line msg
 
 and print_long_line () =
     Printf.eprintf "----------------------------------------------------------\n"

@@ -7,29 +7,21 @@ open Ast
 open Symbol_table
 
 (* Exceptions *)
-exception Unexpected_error of string
-let sem_error msg = (Unexpected_error ("Semantic Analysis should have failed at this point: " ^ msg))
+exception Unexpected_error of Location.code_pos * string
+let sem_error msg loc = (Unexpected_error (loc, "Semantic Analysis should have failed at this point: " ^ msg))
 
-(* LLVM types *)
-let void_type ctx = Llvm.void_type ctx
-let int_type ctx = Llvm.i32_type ctx
-let bool_type ctx = Llvm.i1_type ctx
-let char_type ctx = Llvm.i8_type ctx
-let float_type ctx = Llvm.float_type ctx
-let pointer_type ctx typ = Llvm.pointer_type (typ ctx)
-let function_type ctx ret_typ arg_types =
-    let arg_types = List.map (fun x -> x ctx) arg_types in
-    Llvm.function_type (ret_typ ctx) (Array.of_list arg_types)
+(* Debug
+let print _msg = ()
+    (* Printf.eprintf "** %s\n" _msg; Stdlib.flush stderr; *) *)
 
-(* Constants *)
-let const_zero ctx = Llvm.const_int (int_type ctx) 0
-let const_one ctx = Llvm.const_int (int_type ctx) 1
-let null_ptr ctx typ = Llvm.const_null (pointer_type ctx typ)
+(* let print_lltype msg lltype =
+    Printf.eprintf "*** %s : %s\n" msg (Llvm.string_of_lltype lltype);
+    Stdlib.flush stderr; () *)
 
-(* SizeOf type *)
-let get_type_size ctx typ =
-    let ptr = Llvm.const_gep (null_ptr ctx typ) [|const_one ctx|] in
-    Llvm.const_ptrtoint ptr (int_type ctx)
+(* let print_llvalue msg llvalue =
+    let lltype = Llvm.type_of llvalue in
+    Printf.eprintf "**** %s : %s\n" msg (Llvm.string_of_lltype lltype);
+    Stdlib.flush stderr; () *)
 
 (* Local Types *)
 type typ =
@@ -37,6 +29,7 @@ type typ =
     | Struct of Ast.identifier
     | Array of typ * int list (* Size of each dimension *)
     | ArrayRef of typ * int (* Dimensions *)
+[@@deriving show]
 
 (* Ast.typ to Local types *)
 let rec get_local_typ typ =
@@ -52,7 +45,7 @@ let rec get_local_typ typ =
             Array(typ, sizes)
         | None -> 
             let (typ, dimentions) = get_array_dims typ in
-            Ptr(ArrayRef(typ, dimentions))
+            ArrayRef(typ, dimentions)
     )
     | TypP(typ) -> Ptr(get_local_typ typ)
     | TypS(id) -> Struct(id)
@@ -63,7 +56,7 @@ and get_array_size typ =
         let (typ, sizes) = get_array_size typ in
         (typ, size :: sizes)
     )
-    | TypA(_, None) -> raise (sem_error "Zero-Sized array")
+    | TypA(_, None) -> raise (sem_error "Zero-Sized array" Location.dummy_code_pos)
     | _ -> (get_local_typ typ, [])
 and get_array_dims typ =
     match typ with
@@ -75,24 +68,29 @@ and get_array_dims typ =
 (* Types to Llvm types *)
 let rec get_llvm_type typs typ =
     match typ with
-    | Int -> int_type
-    | Float -> float_type
-    | Bool -> bool_type
-    | Char -> char_type
+    | Int -> lookup_type "@i32" typs
+    | Float -> lookup_type "@f32" typs
+    | Bool -> lookup_type "@bool" typs
+    | Char -> lookup_type "@i8" typs
+    | Void -> lookup_type "@void" typs
+    | Struct(id) -> lookup_type id typs
+    | Ptr(typ) -> Llvm.pointer_type (get_llvm_type typs typ)
     | Array(typ, sizes) ->
         get_array_type typs typ sizes
     | ArrayRef(typ, dims) ->
         let sizes = List.init dims (fun _ -> 0) in
-        get_array_type typs typ sizes
-    | Ptr(typ) -> fun ctx -> pointer_type ctx (get_llvm_type typs typ)
-    | Struct(id) -> lookup_type id typs
-    | Void -> void_type
+        Llvm.pointer_type (get_array_type typs typ sizes)
+and get_llvm_int typs = get_llvm_type typs Int
+and get_llvm_float typs = get_llvm_type typs Float
+and get_llvm_bool typs = get_llvm_type typs Bool
+and get_llvm_char typs = get_llvm_type typs Char
+and get_llvm_void typs = get_llvm_type typs Void
 and get_array_type typs typ sizes =
-    let ll_typ = get_llvm_type typs typ in
-    let fn ll_typ size ctx = Llvm.array_type (ll_typ ctx) size in
-    List.fold_left fn ll_typ sizes
-and get_size_of_type ctx typs typ =
-    get_type_size ctx (get_llvm_type typs typ)
+    let lltype = get_llvm_type typs typ in
+    let array_of_size lltype size =
+        Llvm.array_type lltype size
+    in
+    List.fold_left array_of_size lltype sizes
 and lookup_type id typs =
     fst (lookup id typs)
 and lookup_struct_field struct_id field_id typs =
@@ -100,14 +98,27 @@ and lookup_struct_field struct_id field_id typs =
     let (field_index, field_typ) = lookup field_id fields in
     (field_index, field_typ)
 
+(* Constants *)
+let const_zero typs = Llvm.const_int (get_llvm_int typs) 0
+let const_one typs = Llvm.const_int (get_llvm_int typs) 1
+let null_ptr typ = Llvm.const_null (Llvm.pointer_type typ)
+
+(* SizeOf type *)
+let get_size_of_type typs typ =
+    let ptr = Llvm.const_gep (null_ptr typ) [|const_one typs|] in
+    Llvm.const_ptrtoint ptr (get_llvm_int typs)
+
 (* Main Function *)
 let rec to_llvm_module ast =
     let ctx = Llvm.global_context () in
     let md = Llvm.create_module ctx "module" in
-    let env = cg_runtime_env (ctx, md) (empty_table, empty_table) in
+    let env = (empty_table, empty_table) in
+    let env = cg_types_env (ctx, md) env in
+    let env = cg_runtime_env (ctx, md) env in
     
     let _ = match ast with | Prog(decls) -> (
         let (structs, vars, functs) = reorder_topdecls decls in
+        let env = List.fold_left (cg_struct_decl (ctx, md)) env structs in
         let env = List.fold_left (cg_struct_def (ctx, md)) env structs in
         let env = List.fold_left (cg_fun_decl (ctx, md)) env functs in
         let env = List.fold_left (cg_global_var (ctx, md)) env vars in
@@ -124,10 +135,18 @@ and reorder_topdecls topdecls =
     in
     List.fold_left split_topdecls ([],[],[]) topdecls
 
-and cg_runtime_env (ctx, md) (typs, env) =
-    let print_fn = Llvm.declare_function "print" (function_type ctx void_type [int_type]) md in
+and cg_types_env (ctx, _md) (typs, env) =
+    let typs = add_entry "@i32" (Llvm.i32_type ctx, empty_table) typs in
+    let typs = add_entry "@f32" (Llvm.float_type ctx, empty_table) typs in
+    let typs = add_entry "@bool" (Llvm.i1_type ctx, empty_table) typs in
+    let typs = add_entry "@char" (Llvm.i8_type ctx, empty_table) typs in
+    let typs = add_entry "@void" (Llvm.void_type ctx, empty_table) typs in
+    (typs, env)
+
+and cg_runtime_env (_ctx, md) (typs, env) =
+    let print_fn = Llvm.declare_function "print" (Llvm.function_type (get_llvm_void typs) [|get_llvm_int typs|]) md in
     let env = add_entry "print" (print_fn, Void) env in
-    let getint_fn = Llvm.declare_function "getint" (function_type ctx int_type []) md in
+    let getint_fn = Llvm.declare_function "getint" (Llvm.function_type (get_llvm_int typs) [||]) md in
     let env = add_entry "getint" (getint_fn, Int) env in
     (typs, env)
 
@@ -142,20 +161,18 @@ and cg_global_var (ctx, md) (typs, env) (typ, id, expr) =
     )
     | None -> (
         let typ = get_local_typ typ in
-        let ll_typ = get_llvm_type typs typ in
-        let var = Llvm.declare_global (ll_typ ctx) id md in
+        let lltype = get_llvm_type typs typ in
+        let var = Llvm.declare_global lltype id md in
         let env = add_entry id (var, Ptr(typ)) env in
         (typs, env)
     )
 
-(* Generate code for Struct definition *)
-and cg_struct_def (ctx, _md) (typs, env) (id, fields) =
+(* Generate code for Struct declaration *)
+and cg_struct_decl (ctx, _md) (typs, env) (id, fields) =
     let fields = List.map (fun (typ, id) -> (get_local_typ typ, id)) fields in
 
-    (* Build struct llvm type *)
-    let field_types = List.map (fun (typ, _) -> (get_llvm_type typs typ) ctx) fields in
-    let struct_type = (fun ctx -> Llvm.named_struct_type ctx id) in
-    let _ = Llvm.struct_set_body (struct_type ctx) (Array.of_list field_types) false in
+    (* Declare struct llvm type *)
+    let struct_type = Llvm.named_struct_type ctx id in
 
     (* Build field table for struct *)
     let add_field (fields, curr_index) (typ, id) =
@@ -165,8 +182,18 @@ and cg_struct_def (ctx, _md) (typs, env) (id, fields) =
 
     (add_entry id (struct_type, fields) typs, env)
 
+(* Generate code for Struct definition *)
+and cg_struct_def (_ctx, _md) (typs, env) (id, fields) =
+    let fields = List.map (fun (typ, id) -> (get_local_typ typ, id)) fields in
+
+    (* Build struct llvm type *)
+    let field_types = List.map (fun (typ, _) -> get_llvm_type typs typ) fields in
+    let struct_type = lookup_type id typs in
+    let _ = Llvm.struct_set_body struct_type (Array.of_list field_types) false in
+    (typs, env)
+
 (* Generate code for Function declaration *)
-and cg_fun_decl (ctx, md) (typs, env) { typ=ret_typ; fname=id; formals=formals; body=_; } =
+and cg_fun_decl (_ctx, md) (typs, env) { typ=ret_typ; fname=id; formals=formals; body=_; } =
     (* Convert Ast types to local types *)
     let ret_typ = get_local_typ ret_typ in
     let formals = List.map (fun (t, id) -> (get_local_typ t, id)) formals in
@@ -174,7 +201,7 @@ and cg_fun_decl (ctx, md) (typs, env) { typ=ret_typ; fname=id; formals=formals; 
     (* Add function to the environment *)
     let ll_ret_typ = get_llvm_type typs ret_typ in
     let ll_arg_typs = List.map (fun (t, _) -> get_llvm_type typs t) formals in
-    let fn = Llvm.define_function id (function_type ctx ll_ret_typ ll_arg_typs) md in
+    let fn = Llvm.define_function id (Llvm.function_type ll_ret_typ (Array.of_list ll_arg_typs)) md in
     (typs, add_entry id (fn, ret_typ) env)
 
 (* Generate code for Function definition *)
@@ -186,7 +213,7 @@ and cg_fun_def (ctx, md) (typs, env) { typ=_; fname=id; formals=formals; body=bo
     let fn = Llvm.lookup_function id md in
     let fn = match fn with
         | Some(fn) -> fn
-        | None -> raise (sem_error "Function definition not found")
+        | None -> raise (sem_error "Function definition not found" Location.dummy_code_pos)
     in
 
     (* Create function entry basic block *)
@@ -198,7 +225,7 @@ and cg_fun_def (ctx, md) (typs, env) { typ=_; fname=id; formals=formals; body=bo
     let params = Array.to_list (Llvm.params fn) in
     let add_local_params_to_env env (typ, id) llvalue =
         let lltype = get_llvm_type typs typ in
-        let param = Llvm.build_alloca (lltype ctx) id bld in
+        let param = Llvm.build_alloca lltype id bld in
         let _ = Llvm.build_store llvalue param bld in
         add_entry id (param, Ptr(typ)) env
     in
@@ -244,8 +271,8 @@ and cg_stmt_or_dec (ctx, bld) (typs, env) stmt_or_dec = (* Code for Statement Or
     match stmt_or_dec.node with
     | Dec(typ, id) -> (
         let typ = get_local_typ typ in
-        let ll_typ = get_llvm_type typs typ in
-        let var = Llvm.build_alloca (ll_typ ctx) id bld in
+        let lltype = get_llvm_type typs typ in
+        let var = Llvm.build_alloca lltype id bld in
         add_entry id (var, Ptr(typ)) env
     )
     | Stmt(stmt) -> cg_stmt (ctx, bld) (typs, env) stmt
@@ -256,6 +283,14 @@ and cg_if_stmt (ctx, bld) (typs, env) guard then_stmt else_stmt = (* Code genera
     let then_bb = Llvm.append_block ctx "if_then" fn in
     let else_bb = Llvm.append_block ctx "if_else" fn in
 
+    (* Build continue block if needed *)
+    let then_returns = is_return_present then_stmt in
+    let else_returns = is_return_present else_stmt in
+    let cnt_bb = match (then_returns, else_returns) with
+        | (true, true) -> then_bb
+        | _ -> Llvm.append_block ctx "if_cnt" fn
+    in
+
     (* Evaluate guard and build branch instruction *)
     let (guard, _) = cg_expr (ctx, bld) (typs, env) guard in
     let _ = Llvm.build_cond_br guard then_bb else_bb bld in
@@ -263,27 +298,18 @@ and cg_if_stmt (ctx, bld) (typs, env) guard then_stmt else_stmt = (* Code genera
     (* Build then and else branches *)
     let _ = Llvm.position_at_end then_bb bld in
     let env = cg_stmt (ctx, bld) (typs, env) then_stmt in
+    let _ = if Bool.not (is_return_present then_stmt) then
+        let _ = Llvm.build_br cnt_bb bld in ()
+    in
+
     let _ = Llvm.position_at_end else_bb bld in
     let env = cg_stmt (ctx, bld) (typs, env) else_stmt in
+    let _ = if Bool.not (is_return_present else_stmt) then
+        let _ = Llvm.build_br cnt_bb bld in ()
+    in
 
-    (* Build branches to continue block if needed *)
-    let tbranch_returns = is_return_present then_stmt in
-    let ebranch_returns = is_return_present else_stmt in
-    match (tbranch_returns, ebranch_returns) with
-    | (true, true) -> env
-    | _ -> (
-        let cnt_bb = Llvm.append_block ctx "if_cnt" fn in
-        let _ = if Bool.not tbranch_returns then (
-            let _ = Llvm.position_at_end then_bb bld in
-            let _ = Llvm.build_br cnt_bb bld in ()
-        ) else () in
-        let _ = if Bool.not ebranch_returns then (
-            let _ = Llvm.position_at_end else_bb bld in
-            let _ = Llvm.build_br cnt_bb bld in ()
-        ) else () in
-        let _ = Llvm.position_at_end cnt_bb bld in
-        env
-    )
+    let _ = Llvm.position_at_end cnt_bb bld in
+    env
 and cg_while_stmt (ctx, bld) (typs, env) guard body = (* Code generation for While statements *)
     (* Build guard, loop and continue basic blocks *)
     let fn = Llvm.block_parent (Llvm.insertion_block bld) in
@@ -321,7 +347,7 @@ and is_return_present stmt = (* Check if all paths lead to a return statement *)
         | Block(stmts) -> (
             let is_return_in_block previous stmt_or_dec =
                 match previous with
-                | true -> raise (sem_error "Found statement after return expression.")
+                | true -> raise (sem_error "Found statement after return expression." stmt.loc)
                 | false -> is_return_in_stmt_or_dec stmt_or_dec
             in
             List.fold_left is_return_in_block false stmts
@@ -335,6 +361,7 @@ and is_return_present stmt = (* Check if all paths lead to a return statement *)
 
 (* Generate code for Expressions *)
 and cg_expr (ctx, bld) (typs, env) expr = (* Expressions *)
+    let loc = expr.loc in
     match expr.node with
     | ILiteral(_) | FLiteral(_) | CLiteral(_)
     | BLiteral(_) | SLiteral(_) | SizeOf(_) ->
@@ -343,8 +370,9 @@ and cg_expr (ctx, bld) (typs, env) expr = (* Expressions *)
     | Access(access) -> (
         let (addr, addr_typ) = cg_access (ctx, bld) (typs, env) access in
         match addr_typ with
+        | Ptr(Array(_)) -> (addr, addr_typ)
         | Ptr(typ) -> (Llvm.build_load addr "load" bld, typ)
-        | _ -> raise (sem_error "Access address is not a pointer")
+        | _ -> raise (sem_error "Access address is not a pointer" expr.loc)
     )
     | Assign(access, expr) -> (
         let (expr, expr_typ) = cg_expr (ctx, bld) (typs, env) expr in
@@ -355,20 +383,17 @@ and cg_expr (ctx, bld) (typs, env) expr = (* Expressions *)
     | Addr(access) ->
         cg_access (ctx, bld) (typs, env) access
     | UnaryOp(op, expr) ->
-        cg_un_op (ctx, bld) (typs, env) op expr
+        cg_un_op (ctx, bld) (typs, env) op expr loc
     | BinaryOp(op, lexpr, rexpr) ->
-        cg_bin_op (ctx, bld) (typs, env) op lexpr rexpr
+        cg_bin_op (ctx, bld) (typs, env) op lexpr rexpr loc
 
     | CommaOp(lexpr, rexpr) ->
         let _ = cg_expr (ctx, bld) (typs, env) lexpr in
         cg_expr (ctx, bld) (typs, env) rexpr
 
     | Call(id, args) ->
-        let (fn, ret_typ) = lookup id env in
-        let args = List.map (fun expr -> fst (cg_expr (ctx, bld) (typs, env) expr)) args in
-        match ret_typ with
-        | Void -> (Llvm.build_call fn (Array.of_list args) "" bld, ret_typ)
-        | _ -> (Llvm.build_call fn (Array.of_list args) "fn_call" bld, ret_typ)
+        cg_fn_call (ctx, bld) (typs, env) id args
+
 and cg_access (ctx, bld) (typs, env) access = (* Access Expressions, returns address of variable *)
     match access.node with
     | AccVar(id) ->
@@ -378,28 +403,26 @@ and cg_access (ctx, bld) (typs, env) access = (* Access Expressions, returns add
     )
     | AccIndex(access, expr) -> (
         let (addr, data_typ, indices) = cg_array_access (ctx, bld) (typs, env) access expr in
-        (Llvm.build_gep addr (Array.of_list (const_zero ctx :: indices)) "array_access" bld, Ptr(data_typ))
+        (Llvm.build_gep addr (Array.of_list (const_zero typs :: indices)) "array_access" bld, Ptr(data_typ))
     )
     | AccDot(access, field_id) -> (
         let (addr, addr_typ) = cg_access (ctx, bld) (typs, env) access in
         match addr_typ with
         | Ptr(Struct(struct_id)) -> cg_struct_access (ctx, bld) typs addr struct_id field_id
-        | _ -> raise (sem_error "Access address is not a pointer to struct")
+        | _ -> raise (sem_error "Access address is not a pointer to struct" access.loc)
     )
     | AccArrow(expr, field_id) -> (
         let (addr, addr_typ) = cg_expr (ctx, bld) (typs, env) expr in
         match addr_typ with
         | Ptr(Struct(struct_id)) -> cg_struct_access (ctx, bld) typs addr struct_id field_id
-        | _ -> raise (sem_error "Access address is not a pointer to struct")
+        | _ -> raise (sem_error "Access address is not a pointer to struct" access.loc)
     )
 and _cg_address_of (ctx, bld) (var, typ) =
     (Llvm.build_gep var [|const_zero ctx|] "addr_of" bld, Ptr(typ))
 and cg_struct_access (_ctx, bld) typs addr struct_id field_id =
     let (field_index, field_typ) = lookup_struct_field struct_id field_id typs in
-    let _ = Llvm.dump_value addr; Stdlib.flush stderr in
     let addr = Llvm.build_struct_gep addr field_index "struct_access" bld in
-    let _ = Llvm.dump_value addr; Stdlib.flush stderr in
-    (addr, field_typ)
+    (addr, Ptr(field_typ))
 and cg_array_access (ctx, bld) (typs, env) access expr =
     let (index, _) = cg_expr (ctx, bld) (typs, env) expr in
     match access.node with
@@ -408,10 +431,14 @@ and cg_array_access (ctx, bld) (typs, env) access expr =
         (addr, data_typ, index :: indices)
     )
     | _ -> (
-        let (addr, addr_typ) = cg_access (ctx, bld) (typs, env) access in
+        let (addr, addr_typ) = (cg_access (ctx, bld) (typs, env) access) in
         match addr_typ with
         | Ptr(Array(typ, _)) -> (addr, typ, [ index ])
-        | _ -> raise (sem_error "Array pointer expected")
+        | Ptr(ArrayRef(typ, _)) -> (
+            let addr = Llvm.build_load addr "deref" bld in
+            (addr, typ, [ index ])
+        )
+        | _ -> raise (sem_error ("Array pointer expected, found: " ^ show_typ addr_typ) access.loc)        
     )
 
 and cg_const_expr ctx (typs, env) expr = (* Constant Expressions *)
@@ -423,31 +450,50 @@ and cg_const_expr ctx (typs, env) expr = (* Constant Expressions *)
         cg_const_access ctx (typs, env) access
     | Addr(access) ->
         let (access, access_typ) = cg_const_access ctx (typs, env) access in
-        cg_const_address_of ctx (access, access_typ)
-    | _ -> raise (sem_error "Const expression cannot be evaluated")
+        cg_const_address_of typs (access, access_typ)
+    | _ -> raise (sem_error "Const expression cannot be evaluated" expr.loc)
 and cg_const_access ctx (_typs, env) access = (* Constant Access Expressions *)
     match access.node with
     | AccVar(id) -> lookup id env
     | AccDeref(expr) -> (
         match expr.node with
         | Addr(access) -> cg_const_access ctx (_typs, env) access
-        | _ -> raise (sem_error "Const access cannot be evaluated")
+        | _ -> raise (sem_error "Const access cannot be evaluated" access.loc)
     )
-    | _ -> raise (sem_error "Const access cannot be evaluated")
-and cg_const_address_of ctx (var, typ) =
-    (Llvm.const_gep var [|const_zero ctx|], Ptr(typ))
+    | _ -> raise (sem_error "Const access cannot be evaluated" access.loc)
+and cg_const_address_of typs (var, typ) =
+    (Llvm.const_gep var [|const_zero typs|], Ptr(typ))
 
 and cg_literals ctx typs expr = (* Literal Expressions *)
     match expr.node with
-    | ILiteral(value) -> (Llvm.const_int (int_type ctx) value, Int)
-    | FLiteral(value) -> (Llvm.const_float (float_type ctx) value, Float)
-    | CLiteral(value) -> (Llvm.const_int (char_type ctx) (Char.code value), Char)
-    | BLiteral(value) -> (Llvm.const_int (bool_type ctx) (Bool.to_int value), Bool)
+    | ILiteral(value) -> (Llvm.const_int (get_llvm_int typs) value, Int)
+    | FLiteral(value) -> (Llvm.const_float (get_llvm_float typs) value, Float)
+    | CLiteral(value) -> (Llvm.const_int (get_llvm_char typs) (Char.code value), Char)
+    | BLiteral(value) -> (Llvm.const_int (get_llvm_bool typs) (Bool.to_int value), Bool)
     | SLiteral(value) -> (Llvm.const_stringz ctx value, Ptr(Char))
-    | SizeOf(typ) -> (get_size_of_type ctx typs (get_local_typ typ), Int)
-    | _ -> raise (sem_error "Literal evaluation unexpected error")
+    | SizeOf(typ) ->
+        let lltype = get_llvm_type typs (get_local_typ typ) in
+        (get_size_of_type typs lltype, Int)
+    | _ -> raise (sem_error "Literal evaluation unexpected error" expr.loc)
 
-and cg_un_op (ctx, bld) (typs, env) op expr =  (* Unary Operator Expressions *)
+and cg_fn_call (ctx, bld) (typs, env) id args = (* Function call Expressions*)
+    let (fn, ret_typ) = lookup id env in
+    let array_ptrs_conversion (llvalue, typ) =
+        match typ with
+        | Ptr(Array(typ, sizes)) ->
+            let typ = ArrayRef(typ, List.length sizes) in
+            let lltype = get_llvm_type typs typ in
+            let llvalue = Llvm.build_bitcast llvalue lltype "bitcast" bld in
+            (llvalue, typ)
+        | _ -> (llvalue, typ)
+    in
+    let args = List.map (cg_expr (ctx, bld) (typs, env)) args in
+    let args = List.map (fun expr -> fst (array_ptrs_conversion expr)) args in
+    match ret_typ with
+    | Void -> (Llvm.build_call fn (Array.of_list args) "" bld, ret_typ)
+    | _ -> (Llvm.build_call fn (Array.of_list args) "fn_call" bld, ret_typ)
+
+and cg_un_op (ctx, bld) (typs, env) op expr loc =  (* Unary Operator Expressions *)
     let (expr, typ) = cg_expr (ctx, bld) (typs, env) expr in
     match op with
     | Pos -> (expr, typ)
@@ -455,15 +501,15 @@ and cg_un_op (ctx, bld) (typs, env) op expr =  (* Unary Operator Expressions *)
         match typ with
         | Int | Bool | Char -> (Llvm.build_neg expr "negate" bld, typ)
         | Float -> (Llvm.build_fneg expr "negate" bld, typ)
-        | _ -> raise (sem_error "Unary operation \'Neg\' error")
+        | _ -> raise (sem_error "Unary operation \'Neg\' error" loc)
     )
     | Bit_Not | Not -> (
         match typ with
         | Int | Bool | Char -> (Llvm.build_not expr "not" bld, typ)
-        | _ -> raise (sem_error "Unary operation \'Bit Not | Not\' error")
+        | _ -> raise (sem_error "Unary operation \'Bit Not | Not\' error" loc)
     )
 
-and cg_bin_op (ctx, bld) (typs, env) op lexpr rexpr = (* Binary Operator Expressions *)
+and cg_bin_op (ctx, bld) (typs, env) op lexpr rexpr loc = (* Binary Operator Expressions *)
     let (lexpr, ltype) = cg_expr (ctx, bld) (typs, env) lexpr in
     let (rexpr, rtype) = cg_expr (ctx, bld) (typs, env) rexpr in
     match op with
@@ -473,7 +519,7 @@ and cg_bin_op (ctx, bld) (typs, env) op lexpr rexpr = (* Binary Operator Express
         | (Float, Float) -> (Llvm.build_fadd lexpr rexpr "add" bld, ltype)
         | (Ptr(_), Int) -> (Llvm.build_gep lexpr [|rexpr|] "add" bld, ltype)
         | (Int, Ptr(_)) -> (Llvm.build_gep rexpr [|lexpr|] "add" bld, rtype)
-        | _ -> raise (sem_error "Binary Operation \'Add\' error")
+        | _ -> raise (sem_error "Binary Operation \'Add\' error" loc)
     )
     | Sub -> (
         match (ltype, rtype) with
@@ -483,52 +529,52 @@ and cg_bin_op (ctx, bld) (typs, env) op lexpr rexpr = (* Binary Operator Express
             let negated = Llvm.build_neg rexpr "negate" bld in
             (Llvm.build_gep lexpr [|negated|] "sub" bld, ltype)
         | (Ptr(_), Ptr(_)) ->
-            let ptr_to_int = Llvm.build_ptrtoint rexpr (int_type ctx) "ptr_to_int" bld in
+            let ptr_to_int = Llvm.build_ptrtoint rexpr (get_llvm_int typs) "ptr_to_int" bld in
             let negated = Llvm.build_neg ptr_to_int "negate" bld in
             (Llvm.build_gep lexpr [|negated|] "sub" bld, ltype)
-        | _ -> raise (sem_error "Binary Operation \'Sub\' error")
+        | _ -> raise (sem_error "Binary Operation \'Sub\' error" loc)
     )
     | Mult -> (
         match (ltype, rtype) with
         | (Int, Int) -> (Llvm.build_mul lexpr rexpr "mul" bld, ltype)
         | (Float, Float) -> (Llvm.build_fmul lexpr rexpr "mul" bld, ltype)
-        | _ -> raise (sem_error "Binary Operation \'Mult\' error")
+        | _ -> raise (sem_error "Binary Operation \'Mult\' error" loc)
     )
     | Div -> (
         match (ltype, rtype) with
         | (Int, Int) -> (Llvm.build_sdiv lexpr rexpr "div" bld, ltype)
         | (Float, Float) -> (Llvm.build_fdiv lexpr rexpr "div" bld, ltype)
-        | _ -> raise (sem_error "Binary Operation \'Div\' error")
+        | _ -> raise (sem_error "Binary Operation \'Div\' error" loc)
     )
     | Mod -> (
         match (ltype, rtype) with
         | (Int, Int) -> (Llvm.build_srem lexpr rexpr "mod" bld, ltype)
-        | _ -> raise (sem_error "Binary Operation \'Mod\' error")
+        | _ -> raise (sem_error "Binary Operation \'Mod\' error" loc)
     )
     | Bit_And | And -> (
         match (ltype, rtype) with
         | (Int, Int) | (Bool, Bool) -> (Llvm.build_and lexpr rexpr "and" bld, ltype)
-        | _ -> raise (sem_error "Binary Operation \'Bit And | And\' error")
+        | _ -> raise (sem_error "Binary Operation \'Bit And | And\' error" loc)
     )
     | Bit_Or | Or -> (
         match (ltype, rtype) with
         | (Int, Int) | (Bool, Bool) -> (Llvm.build_or lexpr rexpr "or" bld, ltype)
-        | _ -> raise (sem_error "Binary Operation \'Bit Or | Or\' error")
+        | _ -> raise (sem_error "Binary Operation \'Bit Or | Or\' error" loc)
     )
     | Bit_Xor -> (
         match (ltype, rtype) with
         | (Int, Int) -> (Llvm.build_xor lexpr rexpr "xor" bld, ltype)
-        | _ -> raise (sem_error "Binary Operation \'Bit Xor\' error")
+        | _ -> raise (sem_error "Binary Operation \'Bit Xor\' error" loc)
     )
     | Shift_Left -> (
         match (ltype, rtype) with
         | (Int, Int) -> (Llvm.build_shl lexpr rexpr "shift_left" bld, ltype)
-        | _ -> raise (sem_error "Binary Operation \'Shift Left\' error")
+        | _ -> raise (sem_error "Binary Operation \'Shift Left\' error" loc)
     )
     | Shift_Right -> (
         match (ltype, rtype) with
         | (Int, Int) -> (Llvm.build_ashr lexpr rexpr "shift_right" bld, ltype)
-        | _ -> raise (sem_error "Binary Operation \'Shift Right\' error")
+        | _ -> raise (sem_error "Binary Operation \'Shift Right\' error" loc)
     )
     | Equal | Neq
     | Less | Leq
@@ -539,16 +585,16 @@ and cg_bin_op (ctx, bld) (typs, env) op lexpr rexpr = (* Binary Operator Express
         | (Float, Float) ->
             (Llvm.build_fcmp (get_fcmp_typ op) lexpr rexpr "cmp" bld, Bool)
         | (Ptr(_), Int) ->
-            let ptr_to_int = Llvm.build_ptrtoint lexpr (int_type ctx) "ptr_to_int" bld in
+            let ptr_to_int = Llvm.build_ptrtoint lexpr (get_llvm_int typs) "ptr_to_int" bld in
             (Llvm.build_icmp (get_icmp_typ op) ptr_to_int rexpr "cmp" bld, Bool)
         | (Int, Ptr(_)) ->
-            let ptr_to_int = Llvm.build_ptrtoint rexpr (int_type ctx) "ptr_to_int" bld in
+            let ptr_to_int = Llvm.build_ptrtoint rexpr (get_llvm_int typs) "ptr_to_int" bld in
             (Llvm.build_icmp (get_icmp_typ op) lexpr ptr_to_int "cmp" bld, Bool)
         | (Ptr(_), Ptr(_)) ->
-            let lptr_to_int = Llvm.build_ptrtoint lexpr (int_type ctx) "lptr_to_int" bld in
-            let rptr_to_int = Llvm.build_ptrtoint rexpr (int_type ctx) "rptr_to_int" bld in
+            let lptr_to_int = Llvm.build_ptrtoint lexpr (get_llvm_int typs) "lptr_to_int" bld in
+            let rptr_to_int = Llvm.build_ptrtoint rexpr (get_llvm_int typs) "rptr_to_int" bld in
             (Llvm.build_icmp (get_icmp_typ op) lptr_to_int rptr_to_int "cmp" bld, Bool)
-        | _ -> raise (sem_error "Binary Operation \'comparison\' error")
+        | _ -> raise (sem_error "Binary Operation \'comparison\' error" loc)
     )
 and get_icmp_typ op =
     match op with
@@ -558,7 +604,7 @@ and get_icmp_typ op =
     | Leq -> Llvm.Icmp.Sle
     | Greater -> Llvm.Icmp.Sgt
     | Geq -> Llvm.Icmp.Sge
-    | _ -> raise (sem_error "Unexpected error")
+    | _ -> raise (sem_error "Unexpected error" Location.dummy_code_pos)
 and get_fcmp_typ op =
     match op with
     | Equal -> Llvm.Fcmp.Ueq
@@ -567,4 +613,4 @@ and get_fcmp_typ op =
     | Leq -> Llvm.Fcmp.Ule
     | Greater -> Llvm.Fcmp.Ugt
     | Geq -> Llvm.Fcmp.Uge
-    | _ -> raise (sem_error "Unexpected error")
+    | _ -> raise (sem_error "Unexpected error" Location.dummy_code_pos)

@@ -17,7 +17,7 @@
  (synopsis "microc is a simple subset of the C language.")
  (description "microc is a simple subset of the C language.")
  (depends 
-  (ocaml (>= 4.12)) 
+  (ocaml (>= 4.14)) 
    dune
    menhir
    ppx_deriving
