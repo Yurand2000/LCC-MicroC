@@ -6,23 +6,29 @@
   open Ast
   open List
 
+  (* Auxiliary function to create annotated nodes *)
+  let annotate node (lstart, lend) = {
+    node = node;
+    loc = Location.to_code_position (lstart, lend);
+  }
+
+  (* Empty Block *)
+  let empty_block loc = annotate (Block []) loc
+
+  (* Auxiliary type for variable description in multi declaration lines *)
   type variable_description =
   | Id of string
   | Ptr of variable_description
   | Array of variable_description
   | ArrayNum of variable_description * int
 
-  let annotate node (lstart, lend) = {
-    node = node;
-    loc = Location.to_code_position (lstart, lend);
-  }
-
-  exception ErrorMsg of string
-
-  let _raise_error msg =
-    raise (ErrorMsg msg)
-
-  let empty_block loc = annotate (Block []) loc
+  (* Multi declaration to type * identifier pair *)
+  let rec build_vardecl typ desc =
+    match desc with
+    | Id id -> (typ, id)
+    | Ptr decl -> build_vardecl (TypP typ) decl
+    | Array decl -> build_vardecl (TypA (typ, None)) decl
+    | ArrayNum (decl, size) -> build_vardecl (TypA (typ, Some size)) decl
 
   let local_vardecl_builder ((typ, desc, expr), (startpos, decl_endpos, endpos)) =
     let loc = (startpos, endpos) in
@@ -40,18 +46,13 @@
   let global_vardecl_builder ((typ, desc, expr), (startpos, _decl_endpos, endpos)) =
     annotate (Vardec (typ, desc, expr)) (startpos, endpos)
 
-  let rec build_vardecl t desc =
-    match desc with
-    | Id id -> (t, id)
-    | Ptr decl -> build_vardecl (TypP t) decl
-    | Array decl -> build_vardecl (TypA (t, None)) decl
-    | ArrayNum (decl, size) -> build_vardecl (TypA (t, Some size)) decl
-
+  (* Operator expressions builders *)
   let unOp op e loc =
     annotate (UnaryOp (op, e)) loc
   let binOp op l r loc =
     annotate (BinaryOp (op, l, r)) loc
 
+  (* Access and assign expressions builders *)
   let access l loc =
     annotate (Access l) loc
   let assign l r loc =
@@ -101,6 +102,7 @@
 
 /* ------------------------------------------ */
 /* Precedence and associativity specification */
+/* Adapted from https://en.cppreference.com/w/c/language/operator_precedence */
 %left COMMA
 %right ASSIGN ASSIGN_PLUS ASSIGN_MINUS ASSIGN_TIMES ASSIGN_DIV ASSIGN_MOD ASSIGN_SHIFT_LEFT ASSIGN_SHIFT_RIGHT ASSIGN_BIT_AND ASSIGN_BIT_XOR ASSIGN_BIT_OR
 %left OR
@@ -128,6 +130,7 @@
 
 %%
 
+/* ------------------------------------------ */
 /* Grammar specification */
 /* Program, returns a node of type: program */
 let program :=
@@ -140,17 +143,25 @@ let program :=
 
 /* Top declaration, returns: topdecl list */
 let topdecl :=
-  | v_decls = vardecl; SEMICOLON; // Global variable(s) declaration(s)
+  // Global variable(s) declaration(s)
+  | v_decls = vardecl; SEMICOLON;
     { List.map global_vardecl_builder v_decls }
-  | f_decl = fundecl; { [ annotate (Fundecl f_decl) $loc ] } // Function definition
-  | s_decl = structdecl; {
+
+  // Function definition
+  | f_decl = fundecl;
+    { [ annotate (Fundecl f_decl) $loc ] }
+
+  // Struct declaration
+  | s_decl = structdecl;
+    {
       let (id, fields) = s_decl in
       [ annotate (StructDecl(id, fields)) $loc ]
-    } // Struct declaration
+    }
 
+/* ------------------------------------------ */
 /* Struct declaration, returns: identifier * (typ * identifier) list */
 let structdecl :=
-  | STRUCT; name = IDENT; "{"; fields = structFields; "}"; { (name, fields) }
+  | STRUCT; name = IDENT; "{"; fields = structFields; "}"; { (name, fields) }  
 /* Struct fields, returns: (typ * identifier) list */
 let structFields :=
   | fields = structField; SEMICOLON; { fields }
@@ -161,6 +172,7 @@ let structFieldDeclMulti := // returns: variable_description list
   | desc = vardesc; { [desc] }
   | desc = vardesc; COMMA; descs = structFieldDeclMulti; { desc :: descs }
 
+/* ------------------------------------------ */
 /* Variable declaration and definition, returns: ((typ * identifier * expr option) * (def_start, def_end, expr_end)) list */
 let vardecl :=
   | typ = typ; descs = vardecl_multi;
@@ -184,6 +196,7 @@ let vardesc := // returns: variable_description (local definition, not from ast.
   | desc = vardesc; "["; "]"; { Array desc } //Array (without size)
   | desc = vardesc; "["; size = INT; "]"; { ArrayNum (desc, size) } //Array (with size)
 
+/* ------------------------------------------ */
 /* Function declaration, returns: fun_decl */
 let fundecl :=
   | ret_typ = typ; fname = IDENT; "("; args = funargs; ")"; body = block;
@@ -194,6 +207,26 @@ let funargs := // returns: (typ * identifier) list
   | decl = funarg; COMMA; args = funargs; { decl :: args }
 let funarg := // returns: typ * identifier
   | typ = typ; desc = vardesc; { build_vardecl typ desc }
+
+/* ------------------------------------------ */
+/* Types, without pointers and arrays, returns a node of type: typ */
+let typ :=
+  | TINT; { TypI }
+  | TCHAR; { TypC }
+  | TFLOAT; { TypF }
+  | TVOID; { TypV }
+  | TBOOL; { TypB }
+  | STRUCT; struct_name = IDENT; { TypS struct_name }
+let adv_typ := // pointers and arrays
+  | t = typ; { t }
+  | "*"; t = adv_typ; { TypP t } //Pointer of type
+  | t = adv_typ; "["; i = INT?; "]"; { TypA (t, i) } //Array of type
+
+/* ------------------------------------------ */
+/* Single Line Statement, returns a node of type: stmt */
+let single_line_stmt :=
+  | RETURN; e = expr?; SEMICOLON; { annotate (Return e) $loc } //Return expression
+  | e = expr; SEMICOLON; { annotate (Expr e) $loc } //Generic expression
 
 /* Block, returns a node of type: stmt */
 let block :=
@@ -217,25 +250,6 @@ let block_inner := // Block statements, returns: stmtordec list
       new_stmts @ block
     }
 
-/* Types, without pointers and arrays, returns a node of type: typ */
-let typ :=
-  | TINT; { TypI }
-  | TCHAR; { TypC }
-  | TFLOAT; { TypF }
-  | TVOID; { TypV }
-  | TBOOL; { TypB }
-  | STRUCT; struct_name = IDENT; { TypS struct_name }
-let adv_typ := // pointers and arrays
-  | t = typ; { t }
-  | "*"; t = adv_typ; { TypP t } //Pointer of type
-  | t = adv_typ; "["; i = INT?; "]"; { TypA (t, i) } //Array of type
-
-/* Single Line Statement, returns a node of type: stmt */
-let single_line_stmt :=
-  | RETURN; e = expr?; SEMICOLON; { annotate (Return e) $loc } //Return expression
-  | e = expr; SEMICOLON; { annotate (Expr e) $loc } //Generic expression
-//| SEMICOLON; { annotate (Block []) $loc } //Empty command
-
 /* Statements, returns a node of type: stmt */
 let stmt :=
   | stmt = single_line_stmt; { stmt }
@@ -244,6 +258,7 @@ let stmt :=
   | while_stmt = while_stmt; { while_stmt } //While and Do While statements
   | for_stmt = for_stmt; { for_stmt; } //For statements
 
+/* ------------------------------------------ */
 /* If statement, returns a node of type: stmt */
 let if_stmt :=
   | IF; g = if_guard; b = if_body; //If then
@@ -265,6 +280,7 @@ let if_body :=
   | stmt = single_line_stmt; { stmt }
   | stmt = block; { stmt }
 
+/* ------------------------------------------ */
 /* While statements, returns a node of type: stmt */
 let while_stmt :=
   | WHILE; guard = if_guard; body = stmt; //While statement
@@ -292,6 +308,7 @@ let while_stmt :=
     ]) $loc
   }
 
+/* ------------------------------------------ */
 /* For statement, returns a node of type: stmt */
 let for_stmt :=
   | FOR; "("; init = for_init?; SEMICOLON; guard = for_guard; SEMICOLON; incr = expr?; ")"; body = stmt;
@@ -322,14 +339,16 @@ let for_guard := // returns a node of type: expr
   | guard = expr?;
     { Option.value ~default:(annotate (BLiteral true) $loc) guard }
 
+/* ------------------------------------------ */
 /* Expression with comma operator, returns a node of type: expr */
 let expr :=
-  | e = rexpr; { e } //RExpression
+  | e = rexpr(expr); { e } //RExpression
   | e = lexpr; { annotate (Access e) $loc } //Access to a LExpression
+  | e1 = expr; COMMA; e2 = expr; { annotate (CommaOp (e1, e2)) $loc } //Comma Operator
 
 /* Expression without comma operator, returns a node of type: expr */
 let expr_nc :=
-  | e = rexpr_nc; { e } //RExpression
+  | e = rexpr(expr_nc); { e } //RExpression
   | e = lexpr; { annotate (Access e) $loc } //Access to a LExpression
   | "("; e1 = expr; COMMA; e2 = expr; ")"; { annotate (CommaOp (e1, e2)) $loc } //Comma Operator only if between parenthesis
 
@@ -356,112 +375,62 @@ let lexpr :=
       annotate (AccArrow (e, field)) $loc
     } %prec STRUCT_ACCESS
 
-/* RExpression without comma operator, returns a node of type: expr */
-let rexpr_nc :=
-  // Assignment operators
-  | l = lexpr; ASSIGN; r = expr_nc; { assign l r $loc }
-  | l = lexpr; ASSIGN_PLUS; r = expr_nc; { assignBinOp l r Add $loc }
-  | l = lexpr; ASSIGN_MINUS; r = expr_nc; { assignBinOp l r Sub $loc }
-  | l = lexpr; ASSIGN_TIMES; r = expr_nc; { assignBinOp l r Mult $loc }
-  | l = lexpr; ASSIGN_DIV; r = expr_nc; { assignBinOp l r Div $loc }
-  | l = lexpr; ASSIGN_MOD; r = expr_nc; { assignBinOp l r Mod $loc }
-  | l = lexpr; ASSIGN_BIT_AND; r = expr_nc; { assignBinOp l r Bit_And $loc }
-  | l = lexpr; ASSIGN_BIT_OR; r = expr_nc; { assignBinOp l r Bit_Or $loc }
-  | l = lexpr; ASSIGN_BIT_XOR; r = expr_nc; { assignBinOp l r Bit_Xor $loc }
-  | l = lexpr; ASSIGN_SHIFT_LEFT; r = expr_nc; { assignBinOp l r Shift_Left $loc }
-  | l = lexpr; ASSIGN_SHIFT_RIGHT; r = expr_nc; { assignBinOp l r Shift_Right $loc }
+/* RExpression, parametrized on the expression nonterminal symbol, returns a node of type: expr */
+/* The parametrization is needed to identify the two cases where Comma Operators may occur:
+   comma operators occur differently inside expression than inside function calls arguments. */
+let rexpr(expr_sym) :=
+  //AExpression is RExpression
+  | e = aexpr; { e }
 
-  //Arithmetic Operators
-  | PLUS; e = expr_nc; { e } %prec UPLUS
-  | MINUS; e = expr_nc; { unOp Neg e $loc } %prec UMINUS
-  | l = expr_nc; PLUS; r = expr_nc; { binOp Add l r $loc }
-  | l = expr_nc; MINUS; r = expr_nc; { binOp Sub l r $loc }
-  | l = expr_nc; TIMES; r = expr_nc; { binOp Mult l r $loc }
-  | l = expr_nc; DIV; r = expr_nc; { binOp Div l r $loc }
-  | l = expr_nc; MOD; r = expr_nc; { binOp Mod l r $loc }
-
-  //Logic Operators
-  | l = expr_nc; AND; r = expr_nc; { binOp And l r $loc }
-  | l = expr_nc; OR; r = expr_nc; { binOp Or l r $loc }
-  | NOT; e = expr_nc; { unOp Not e $loc }
-
-  //Comparison Operators
-  | l = expr_nc; LS; r = expr_nc; { binOp Less l r $loc }
-  | l = expr_nc; GR; r = expr_nc; { binOp Greater l r $loc }
-  | l = expr_nc; LEQ; r = expr_nc; { binOp Leq l r $loc }
-  | l = expr_nc; GEQ; r = expr_nc; { binOp Geq l r $loc }
-  | l = expr_nc; EQ; r = expr_nc; { binOp Equal l r $loc }
-  | l = expr_nc; NEQ; r = expr_nc; { binOp Neq l r $loc }
-
-  //Bitwise Operators
-  | l = expr_nc; BIT_AND; r = expr_nc; { binOp Bit_And l r $loc }
-  | l = expr_nc; BIT_OR; r = expr_nc; { binOp Bit_Or l r $loc }
-  | BIT_NOT; e = expr_nc; { unOp Bit_Not e $loc }
-  | l = expr_nc; BIT_XOR; r = expr_nc; { binOp Bit_Xor l r $loc }
-  | l = expr_nc; SHIFT_LEFT; r = expr_nc; { binOp Shift_Left l r $loc }
-  | l = expr_nc; SHIFT_RIGHT; r = expr_nc; { binOp Shift_Right l r $loc }
-
-  //RExpression commons
-  | e = rexpr_common; { e }
-
-/* RExpression with comma operator, returns a node of type: expr */
-let rexpr :=
-  // Assignment operators
-  | l = lexpr; ASSIGN; r = expr; { assign l r $loc }
-  | l = lexpr; ASSIGN_PLUS; r = expr; { assignBinOp l r Add $loc }
-  | l = lexpr; ASSIGN_MINUS; r = expr; { assignBinOp l r Sub $loc }
-  | l = lexpr; ASSIGN_TIMES; r = expr; { assignBinOp l r Mult $loc }
-  | l = lexpr; ASSIGN_DIV; r = expr; { assignBinOp l r Div $loc }
-  | l = lexpr; ASSIGN_MOD; r = expr; { assignBinOp l r Mod $loc }
-  | l = lexpr; ASSIGN_BIT_AND; r = expr; { assignBinOp l r Bit_And $loc }
-  | l = lexpr; ASSIGN_BIT_OR; r = expr; { assignBinOp l r Bit_Or $loc }
-  | l = lexpr; ASSIGN_BIT_XOR; r = expr; { assignBinOp l r Bit_Xor $loc }
-  | l = lexpr; ASSIGN_SHIFT_LEFT; r = expr; { assignBinOp l r Shift_Left $loc }
-  | l = lexpr; ASSIGN_SHIFT_RIGHT; r = expr; { assignBinOp l r Shift_Right $loc }
-
-  //Arithmetic Operators
-  | PLUS; e = expr; { e } %prec UPLUS
-  | MINUS; e = expr; { unOp Neg e $loc } %prec UMINUS
-  | l = expr; PLUS; r = expr; { binOp Add l r $loc }
-  | l = expr; MINUS; r = expr; { binOp Sub l r $loc }
-  | l = expr; TIMES; r = expr; { binOp Mult l r $loc }
-  | l = expr; DIV; r = expr; { binOp Div l r $loc }
-  | l = expr; MOD; r = expr; { binOp Mod l r $loc }
-
-  //Logic Operators
-  | l = expr; AND; r = expr; { binOp And l r $loc }
-  | l = expr; OR; r = expr; { binOp Or l r $loc }
-  | NOT; e = expr; { unOp Not e $loc }
-
-  //Comparison Operators
-  | l = expr; LS; r = expr; { binOp Less l r $loc }
-  | l = expr; GR; r = expr; { binOp Greater l r $loc }
-  | l = expr; LEQ; r = expr; { binOp Leq l r $loc }
-  | l = expr; GEQ; r = expr; { binOp Geq l r $loc }
-  | l = expr; EQ; r = expr; { binOp Equal l r $loc }
-  | l = expr; NEQ; r = expr; { binOp Neq l r $loc }
-
-  //Bitwise Operators
-  | l = expr; BIT_AND; r = expr; { binOp Bit_And l r $loc }
-  | l = expr; BIT_OR; r = expr; { binOp Bit_Or l r $loc }
-  | BIT_NOT; e = expr; { unOp Bit_Not e $loc }
-  | l = expr; BIT_XOR; r = expr; { binOp Bit_Xor l r $loc }
-  | l = expr; SHIFT_LEFT; r = expr; { binOp Shift_Left l r $loc }
-  | l = expr; SHIFT_RIGHT; r = expr; { binOp Shift_Right l r $loc }
-
-  //Comma Operator
-  | e1 = expr; COMMA; e2 = expr; { annotate (CommaOp (e1, e2)) $loc }
-
-  //RExpression commons
-  | e = rexpr_common; { e }
-
-/* RExpressions that are common for both comma and non comma variants, returns a node of type: expr */
-let rexpr_common :=
-  | e = aexpr; { e } //AExpression is RExpression
-  | fun_id = IDENT; "("; args = fn_call_args; ")"; //Function call
+  //Function call
+  | fun_id = IDENT; "("; args = fn_call_args; ")";
     {
       annotate (Call (fun_id, args)) $loc
     } %prec FN_CALL
+
+  // Assignment operators
+  | l = lexpr; ASSIGN; r = expr_sym; { assign l r $loc }
+  | l = lexpr; ASSIGN_PLUS; r = expr_sym; { assignBinOp l r Add $loc }
+  | l = lexpr; ASSIGN_MINUS; r = expr_sym; { assignBinOp l r Sub $loc }
+  | l = lexpr; ASSIGN_TIMES; r = expr_sym; { assignBinOp l r Mult $loc }
+  | l = lexpr; ASSIGN_DIV; r = expr_sym; { assignBinOp l r Div $loc }
+  | l = lexpr; ASSIGN_MOD; r = expr_sym; { assignBinOp l r Mod $loc }
+  | l = lexpr; ASSIGN_BIT_AND; r = expr_sym; { assignBinOp l r Bit_And $loc }
+  | l = lexpr; ASSIGN_BIT_OR; r = expr_sym; { assignBinOp l r Bit_Or $loc }
+  | l = lexpr; ASSIGN_BIT_XOR; r = expr_sym; { assignBinOp l r Bit_Xor $loc }
+  | l = lexpr; ASSIGN_SHIFT_LEFT; r = expr_sym; { assignBinOp l r Shift_Left $loc }
+  | l = lexpr; ASSIGN_SHIFT_RIGHT; r = expr_sym; { assignBinOp l r Shift_Right $loc }
+
+  //Arithmetic Operators
+  | PLUS; e = expr_sym; { e } %prec UPLUS
+  | MINUS; e = expr_sym; { unOp Neg e $loc } %prec UMINUS
+  | l = expr_sym; PLUS; r = expr_sym; { binOp Add l r $loc }
+  | l = expr_sym; MINUS; r = expr_sym; { binOp Sub l r $loc }
+  | l = expr_sym; TIMES; r = expr_sym; { binOp Mult l r $loc }
+  | l = expr_sym; DIV; r = expr_sym; { binOp Div l r $loc }
+  | l = expr_sym; MOD; r = expr_sym; { binOp Mod l r $loc }
+
+  //Logic Operators
+  | l = expr_sym; AND; r = expr_sym; { binOp And l r $loc }
+  | l = expr_sym; OR; r = expr_sym; { binOp Or l r $loc }
+  | NOT; e = expr_sym; { unOp Not e $loc }
+
+  //Comparison Operators
+  | l = expr_sym; LS; r = expr_sym; { binOp Less l r $loc }
+  | l = expr_sym; GR; r = expr_sym; { binOp Greater l r $loc }
+  | l = expr_sym; LEQ; r = expr_sym; { binOp Leq l r $loc }
+  | l = expr_sym; GEQ; r = expr_sym; { binOp Geq l r $loc }
+  | l = expr_sym; EQ; r = expr_sym; { binOp Equal l r $loc }
+  | l = expr_sym; NEQ; r = expr_sym; { binOp Neq l r $loc }
+
+  //Bitwise Operators
+  | l = expr_sym; BIT_AND; r = expr_sym; { binOp Bit_And l r $loc }
+  | l = expr_sym; BIT_OR; r = expr_sym; { binOp Bit_Or l r $loc }
+  | BIT_NOT; e = expr_sym; { unOp Bit_Not e $loc }
+  | l = expr_sym; BIT_XOR; r = expr_sym; { binOp Bit_Xor l r $loc }
+  | l = expr_sym; SHIFT_LEFT; r = expr_sym; { binOp Shift_Left l r $loc }
+  | l = expr_sym; SHIFT_RIGHT; r = expr_sym; { binOp Shift_Right l r $loc }
+
   //Prefix increment / decrement
   | INCREMENT; e = lexpr;
     {
@@ -473,6 +442,7 @@ let rexpr_common :=
       let one_expr = annotate (ILiteral 1) $loc in
       assignBinOp e one_expr Sub $loc
     } %prec PRE_INCR_DECR
+
   //Postfix increment / decrement
   | e = lexpr; INCREMENT;
     {
@@ -486,7 +456,9 @@ let rexpr_common :=
       let decr = assignBinOp e one_expr Sub $loc in
       binOp Add decr one_expr $loc
     } %prec POST_INCR_DECR
-  | SIZEOF; "("; t = adv_typ; ")"; { annotate (SizeOf t) $loc } // SizeOf
+
+  //SizeOf operator
+  | SIZEOF; "("; t = adv_typ; ")"; { annotate (SizeOf t) $loc }
 
 /* Function call arguments, returns: expr list */
 let fn_call_args :=
@@ -494,6 +466,7 @@ let fn_call_args :=
   | e = expr_nc; { [ e ] }
   | e = expr_nc; COMMA; exprs = fn_call_args; { e :: exprs }
 
+/* ------------------------------------------ */
 /* AExpression, returns a node of type: expr */
 let aexpr :=
   | ival = INT; { annotate (ILiteral ival) $loc }
@@ -502,5 +475,5 @@ let aexpr :=
   | fval = FLOAT; { annotate (FLiteral fval) $loc }
   | sval = STRING; { annotate (SLiteral sval) $loc }
   | NULL; { annotate (ILiteral 0) $loc }
-  | "("; e = rexpr; ")"; { e }
+  | "("; e = rexpr(expr); ")"; { e }
   | "&"; e = lexpr; { annotate (Addr e) $loc } %prec ADDR_OF
