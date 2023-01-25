@@ -6,17 +6,22 @@ type token =
 | RETURN | NULL
 | STRUCT | SIZEOF
 
-(* Operators *)
-| ASSIGN
+(* Mathematical Operators *)
 | PLUS | MINUS | TIMES | DIV | MOD
 | INCREMENT | DECREMENT
 
+(* Comparison operators *)
 | EQ | NEQ | LEQ | LS | GR | GEQ
+
+(* Logic Operators *)
 | AND | OR | NOT
 
+(* Bitwise operators *)
 | BIT_AND | BIT_OR | BIT_NOT | BIT_XOR
 | SHIFT_LEFT | SHIFT_RIGHT
 
+(* Assignment Operators*)
+| ASSIGN
 | ASSIGN_PLUS | ASSIGN_MINUS | ASSIGN_TIMES
 | ASSIGN_DIV | ASSIGN_MOD
 | ASSIGN_BIT_AND | ASSIGN_BIT_OR
@@ -31,10 +36,13 @@ type token =
 | STRING of string
 | BOOL of bool
 
-(* Other Symbols *)
-| SEMICOLON | COMMA | DOT | ARROW
+(* Parenthesis *)
 | LPAREN | RPAREN
 | LSQR_BRACKET | RSQR_BRACKET
 | LBRACE | RBRACE
+
+(* Other Symbols *)
+| SEMICOLON | COMMA | DOT | ARROW
 | EOF
+
 [@@deriving show]
