@@ -124,8 +124,9 @@ let rec tc_expr env expr =
         let (lenv, _) = tc_expr env lexpr in
         tc_expr lenv rexpr
     | Call(id, args) -> tc_fn_call env id args loc
+    | Cast(_, _) -> raise (Semantic_error(loc, "Type cast not implemented."))
     | ILiteral(_) | FLiteral(_) | CLiteral(_)
-    | BLiteral(_) | SLiteral(_) | SizeOf(_) ->
+    | BLiteral(_) | SLiteral(_) | SizeOf(_) | SizeOfExpr(_) ->
         tc_const_expr env expr
 and tc_const_expr env expr =
     let loc = expr.loc in
@@ -140,6 +141,7 @@ and tc_const_expr env expr =
     | BLiteral(_) -> (env, Bool)
     | SLiteral(_) -> (env, Ptr Char)
     | SizeOf(_) -> (env, Int)
+    | SizeOfExpr(_) -> (env, Int)
     | Access(access) -> tc_const_access env access
     | Addr(access) -> tc_const_access env access
     | UnaryOp(op, expr) -> tc_un_op env tc_const_expr op expr loc

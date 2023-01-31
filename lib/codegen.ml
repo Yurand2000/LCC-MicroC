@@ -400,7 +400,7 @@ and cg_expr (ctx, bld) (typs, env) expr = (* Expressions *)
     let loc = expr.loc in
     match expr.node with
     | ILiteral(_) | FLiteral(_) | CLiteral(_)
-    | BLiteral(_) | SLiteral(_) | SizeOf(_) ->
+    | BLiteral(_) | SLiteral(_) | SizeOf(_) | SizeOfExpr(_) ->
         cg_literals ctx typs expr
 
     | Access(access) -> (
@@ -429,6 +429,8 @@ and cg_expr (ctx, bld) (typs, env) expr = (* Expressions *)
 
     | Call(id, args) ->
         cg_fn_call (ctx, bld) (typs, env) id args
+
+    | Cast(_, _) -> raise (sem_error "Type cast not implemented." loc)
 
 and cg_access (ctx, bld) (typs, env) access = (* Access Expressions, returns address of variable *)
     match access.node with
@@ -480,23 +482,26 @@ and cg_array_access (ctx, bld) (typs, env) access expr =
 and cg_const_expr ctx (typs, env) expr = (* Constant Expressions *)
     match expr.node with
     | ILiteral(_) | FLiteral(_) | CLiteral(_)
-    | BLiteral(_) | SLiteral(_) | SizeOf(_) ->
+    | BLiteral(_) | SLiteral(_) | SizeOf(_) | SizeOfExpr(_) ->
         cg_literals ctx typs expr
     | Access(access) ->
         cg_const_access ctx (typs, env) access
     | Addr(access) ->
         let (access, access_typ) = cg_const_access ctx (typs, env) access in
         cg_const_address_of typs (access, access_typ)
-    | _ -> raise (sem_error "Const expression cannot be evaluated" expr.loc)
+    | Assign(_, _) | Call(_, _) | Cast(_, _) ->
+        raise (sem_error "This expression cannot be const evaluated" expr.loc)
+    | UnaryOp(_, _) | BinaryOp(_, _, _) | CommaOp(_, _) ->
+        raise (sem_error "This expression must be const evaluated before code generation" expr.loc)
 and cg_const_access ctx (_typs, env) access = (* Constant Access Expressions *)
     match access.node with
     | AccVar(id) -> lookup id env
     | AccDeref(expr) -> (
         match expr.node with
         | Addr(access) -> cg_const_access ctx (_typs, env) access
-        | _ -> raise (sem_error "Const access cannot be evaluated" access.loc)
+        | _ -> raise (sem_error "This const access expression cannot be evaluated" access.loc)
     )
-    | _ -> raise (sem_error "Const access cannot be evaluated" access.loc)
+    | _ -> raise (sem_error "This const access expression cannot be evaluated" access.loc)
 and cg_const_address_of typs (var, typ) =
     (Llvm.const_gep var [|const_zero typs|], Ptr(typ))
 
@@ -510,7 +515,10 @@ and cg_literals ctx typs expr = (* Literal Expressions *)
     | SizeOf(typ) ->
         let lltype = get_llvm_type typs (get_local_typ typ) in
         (get_size_of_type typs lltype, Int)
-    | _ -> raise (sem_error "Literal evaluation unexpected error" expr.loc)
+    | SizeOfExpr(expr) ->
+        raise (sem_error "SizeOfExpr Literal evaluation must be done before code generation." expr.loc)
+    | _ ->
+        raise (sem_error "Literal evaluation unexpected error" expr.loc)
 
 and cg_fn_call (ctx, bld) (typs, env) id args = (* Function call Expressions*)
     let (fn, ret_typ) = lookup id env in
