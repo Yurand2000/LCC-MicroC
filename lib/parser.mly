@@ -15,36 +15,37 @@
   (* Empty Block *)
   let empty_block loc = annotate (Block []) loc
 
-  (* Auxiliary type for variable description in multi declaration lines *)
-  type variable_description =
+  (* Auxiliary type for Variable Declarators in multi declaration lines *)
+  (* From https://en.cppreference.com/w/c/language/declarations *)
+  type variable_declarator =
   | Id of string
-  | Ptr of variable_description
-  | Array of variable_description
-  | ArrayNum of variable_description * int
+  | Ptr of variable_declarator
+  | Array of variable_declarator
+  | ArrayNum of variable_declarator * int
 
-  (* Multi declaration to type * identifier pair *)
-  let rec build_vardecl typ desc =
+  (* Type and Variable Declarator to (type * identifier) pair *)
+  let rec to_typ_id typ desc =
     match desc with
     | Id id -> (typ, id)
-    | Ptr decl -> build_vardecl (TypP typ) decl
-    | Array decl -> build_vardecl (TypA (typ, None)) decl
-    | ArrayNum (decl, size) -> build_vardecl (TypA (typ, Some size)) decl
+    | Ptr decl -> to_typ_id (TypP typ) decl
+    | Array decl -> to_typ_id (TypA (typ, None)) decl
+    | ArrayNum (decl, size) -> to_typ_id (TypA (typ, Some size)) decl
 
-  let local_vardecl_builder ((typ, desc, expr), (startpos, decl_endpos, endpos)) =
-    let loc = (startpos, endpos) in
-    let decl_loc = (startpos, decl_endpos) in
-    let declaration = annotate (Dec (typ, desc)) decl_loc in
-    match expr with
-      | Some(expr) -> (
+  (* Given a local variable declaration, generates the nodes to declare and optionally initialize the variable. *)
+  (* returns: stmtordec list*)
+  let local_vardecl_builder (decl, expr) =
+    let ((typ, desc), decl_loc) = decl in
+    let variable_declaration = annotate (Dec (typ, desc)) decl_loc in
+    let initializer_expr = Option.map (
+        fun (expr, expr_loc) -> 
+        let loc = (fst(decl_loc), snd(expr_loc)) in
         let access = annotate (AccVar desc) decl_loc in
         let assign = annotate (Assign (access, expr)) loc in
         let stmt = annotate (Expr assign) loc in
-        declaration :: (annotate (Stmt stmt) loc) :: []
-      )
-      | None -> declaration :: []
-
-  let global_vardecl_builder ((typ, desc, expr), (startpos, _decl_endpos, endpos)) =
-    annotate (Vardec (typ, desc, expr)) (startpos, endpos)
+        annotate (Stmt stmt) loc
+      ) expr
+    in
+    variable_declaration :: (Option.to_list initializer_expr)
 
   (* Operator expressions builders *)
   let unOp op e loc =
@@ -134,25 +135,28 @@
 /* Grammar specification */
 /* Program, returns a node of type: program */
 let program :=
-  | decl = topdecl; prog = program;
-    {
-      match prog with
-      | Prog decls -> Prog( decl @ decls )
-    }
-  | EOF; { Prog([]) }
+  | decls = flatten(list(topdecl)); EOF; { Prog(decls) }
 
 /* Top declaration, returns: topdecl list */
 let topdecl :=
   // Global variable(s) declaration(s)
-  | v_decls = vardecl; SEMICOLON;
-    { List.map global_vardecl_builder v_decls }
+  | v_decls = var_definition; SEMICOLON;
+    {
+      let builder (decl, expr) =
+        let ((typ, desc), decl_loc) = decl in
+        match expr with
+        | Some(expr, expr_loc) -> annotate (Vardec (typ, desc, Some(expr))) (fst(decl_loc), snd(expr_loc))
+        | None -> annotate (Vardec (typ, desc, None)) decl_loc
+      in
+      List.map builder v_decls
+    }
 
   // Function definition
   | f_decl = fundecl;
     { [ annotate (Fundecl f_decl) $loc ] }
 
   // Struct declaration
-  | s_decl = structdecl;
+  | s_decl = struct_declaration;
     {
       let (id, fields) = s_decl in
       [ annotate (StructDecl(id, fields)) $loc ]
@@ -160,53 +164,51 @@ let topdecl :=
 
 /* ------------------------------------------ */
 /* Struct declaration, returns: identifier * (typ * identifier) list */
-let structdecl :=
-  | STRUCT; name = IDENT; "{"; fields = structFields; "}"; { (name, fields) }  
-/* Struct fields, returns: (typ * identifier) list */
-let structFields :=
-  | fields = structField; SEMICOLON; { fields }
-  | fields = structField; SEMICOLON; other_fields = structFields; { fields @ other_fields }
-let structField := // Struct field, returns: (typ * identifier) list
-  | typ = typ; descs = structFieldDeclMulti; { List.map (build_vardecl typ) descs }
-let structFieldDeclMulti := // returns: variable_description list
-  | desc = vardesc; { [desc] }
-  | desc = vardesc; COMMA; descs = structFieldDeclMulti; { desc :: descs }
+let struct_declaration :=
+  | STRUCT; name = IDENT; "{"; fields = flatten(nonempty_list(struct_field_definition)); "}";
+  { (name, fields) }
+let struct_field_definition := // Struct field, returns: (typ * identifier) list
+  | typ = typ; descs = separated_nonempty_list(COMMA, var_declarator); SEMICOLON;
+  { List.map (to_typ_id typ) descs }
 
 /* ------------------------------------------ */
-/* Variable declaration and definition, returns: ((typ * identifier * expr option) * (def_start, def_end, expr_end)) list */
-let vardecl :=
-  | typ = typ; descs = vardecl_multi;
+/* Variable declaration and definition, for both global and local variables. */
+/* returns: ( ((typ * identifier) * location) * ((expr * location) option) ) list */
+let var_definition :=
+  | typ = typ; descs = separated_nonempty_list(COMMA, var_declaration_or_definition);
     {
-      let vardecl_builder vardesc =
-        let (desc, (desc_start, desc_end), expr, (_expr_start, expr_end)) = vardesc in
-        let (typ, desc) = build_vardecl typ desc in
-        ((typ, desc, expr), (desc_start, desc_end, expr_end))
+      let builder (desc, expr) =
+        let (desc, desc_loc) = desc in
+        let (typ, desc) = to_typ_id typ desc in
+        ( ((typ, desc), desc_loc), expr )
       in
-      List.map vardecl_builder descs
+      List.map builder descs
     }
-let vardecl_multi := // returns: (variable_description * description_location * expr option * expr_location) list
-  | desc = vardesc; { [( desc, $loc(desc), None, ($endpos(desc), $endpos(desc)) )] }
-  | desc = vardesc; ASSIGN; e = expr_nc; { [( desc, $loc(desc), Some(e), $loc(e) )] }
-  | desc = vardesc; COMMA; other = vardecl_multi; { ( desc, $loc(desc), None, ($endpos(desc), $endpos(desc)) ) :: other }
-  | desc = vardesc; ASSIGN; e = expr_nc; COMMA; other = vardecl_multi; { ( desc, $loc(desc), Some(e), $loc(e) ) :: other }
-let vardesc := // returns: variable_description (local definition, not from ast.ml)
+let var_declaration_or_definition := // returns: (variable_declarator * location) * ((expr * location) option)
+  | desc = var_declarator; { ( (desc, $loc(desc)), None ) }
+  | desc = var_declarator; ASSIGN; e = expr_nc; { ( (desc, $loc(desc)), Some(e, $loc(e)) ) }
+
+/* ------------------------------------------ */
+/* Variable Declarator (as seen in a multi line definition/declaration), returns: variable_declarator */
+let var_declarator :=
+  | "*"; desc = var_declarator; { Ptr desc } //Pointer
+  | desc = var_declarator_noptr; { desc } //Non-Pointer Declaration
+let var_declarator_noptr :=
   | id = IDENT; { Id id } //Identifier
-  | "*"; desc = vardesc; { Ptr desc } //Pointer
-  | "("; desc = vardesc; ")"; { desc }
-  | desc = vardesc; "["; "]"; { Array desc } //Array (without size)
-  | desc = vardesc; "["; size = INT; "]"; { ArrayNum (desc, size) } //Array (with size)
+  | "("; desc = var_declarator; ")"; { desc }
+  | desc = var_declarator_noptr; "["; "]"; { Array desc } //Array (without size)
+  | desc = var_declarator_noptr; "["; size = INT; "]"; { ArrayNum (desc, size) } //Array (with size)
 
 /* ------------------------------------------ */
 /* Function declaration, returns: fun_decl */
 let fundecl :=
-  | ret_typ = typ; fname = IDENT; "("; args = funargs; ")"; body = block;
-    { { typ = ret_typ; fname = fname; formals = args; body = body; } }
-let funargs := // returns: (typ * identifier) list
-  | { [] }
-  | decl = funarg; { [decl] }
-  | decl = funarg; COMMA; args = funargs; { decl :: args }
+  | ret_typ = typ; fname = var_declarator; "("; args = separated_list(COMMA, funarg); ")"; body = block;
+    {
+      let (ret_typ, fname) = to_typ_id ret_typ fname in
+      { typ = ret_typ; fname = fname; formals = args; body = body; }
+    }
 let funarg := // returns: typ * identifier
-  | typ = typ; desc = vardesc; { build_vardecl typ desc }
+  | typ = typ; desc = var_declarator; { to_typ_id typ desc }
 
 /* ------------------------------------------ */
 /* Types, without pointers and arrays, returns a node of type: typ */
@@ -218,37 +220,29 @@ let typ :=
   | TBOOL; { TypB }
   | STRUCT; struct_name = IDENT; { TypS struct_name }
 let adv_typ := // pointers and arrays
-  | t = typ; { t }
+  | t = adv_typ_noptr; { t }
   | "*"; t = adv_typ; { TypP t } //Pointer of type
+let adv_typ_noptr :=
+  | t = typ; { t }
+  | "("; t = adv_typ; ")"; { t }
   | t = adv_typ; "["; i = INT?; "]"; { TypA (t, i) } //Array of type
 
 /* ------------------------------------------ */
-/* Single Line Statement, returns a node of type: stmt */
+/* Single Line Statement (inline), returns a node of type: stmt */
+/* These are the statements that can be used inside if, while and for bodies without opening a scope. */
 let single_line_stmt :=
   | RETURN; e = expr?; SEMICOLON; { annotate (Return e) $loc } //Return expression
   | e = expr; SEMICOLON; { annotate (Expr e) $loc } //Generic expression
 
 /* Block, returns a node of type: stmt */
 let block :=
-  | "{"; block = block_inner?; "}";
-    {
-      let block = Option.value block ~default:[] in
-      annotate (Block block) $loc
-    }
-let block_inner := // Block statements, returns: stmtordec list
-  | stmt = stmt; block = block_inner?; // Statements
-    {
-      let stmt = annotate (Stmt stmt) $loc(stmt) in
-      let block = Option.value block ~default:[] in
-      stmt :: block
-    }
-  | vardescs = vardecl; SEMICOLON; block = block_inner?; // Variable declaration and initialization
-    {
-      let new_stmts = List.map local_vardecl_builder vardescs in
-      let new_stmts = List.concat new_stmts in
-      let block = Option.value block ~default:[] in
-      new_stmts @ block
-    }
+  | "{"; block = flatten(list(stmt_or_decl)); "}";
+    { annotate (Block block) $loc }
+let stmt_or_decl := // Block statement or declaration, returns: stmtordec list
+  | stmt = stmt;
+    { [ annotate (Stmt stmt) $loc ] }
+  | var_definitions = var_definition; SEMICOLON;
+    { List.flatten (List.map local_vardecl_builder var_definitions) }
 
 /* Statements, returns a node of type: stmt */
 let stmt :=
@@ -283,15 +277,22 @@ let if_body :=
 /* ------------------------------------------ */
 /* While statements, returns a node of type: stmt */
 let while_stmt :=
-  | WHILE; guard = if_guard; body = stmt; //While statement
+  // While statement
+  | WHILE; guard = if_guard; body = stmt;
     { annotate (While (guard, body)) $loc }
-  | DO; body = stmt; WHILE; guard = if_guard; SEMICOLON; //Do While statement
+  // Do While statement
+  // A DoWhile statement is compiled as a while statement, where the guard is computed as the
+  // last command in the while body, outside of its scope, and the initial value of the guard is true.
+  // The names introduced in the while's body scope cannot be used in the guard.
+  | DO; body = stmt; WHILE; guard = if_guard; SEMICOLON;
   {
+    let guard_var_name = "0_do_while_guard" in (* names starting with digits cannot conflict with any variable name *)
     let bool_true = annotate (BLiteral true) $loc(guard) in
-    let guard_access = annotate (AccVar "0guard") $loc(guard) in
+    let guard_access = annotate (AccVar guard_var_name) $loc(guard) in
     let guard_expr = annotate (Access guard_access) $loc(guard) in
     let guard_init = annotate (Assign(guard_access, bool_true)) $loc(guard) in
     let guard_init = annotate (Expr guard_init) $loc(guard) in
+
     let guard_assign = annotate (Assign(guard_access, guard)) $loc(guard) in
     let guard_assign = annotate (Expr guard_assign) $loc(guard) in
     let while_body =
@@ -302,7 +303,7 @@ let while_stmt :=
     in
     let while_stmt = annotate (While (guard_expr, while_body)) $loc in
     annotate (Block [
-      annotate (Dec(TypB, "0guard")) $loc(guard);
+      annotate (Dec(TypB, guard_var_name)) $loc(guard);
       annotate (Stmt guard_init) $loc(guard);
       annotate (Stmt while_stmt) $loc(body)
     ]) $loc
@@ -310,10 +311,11 @@ let while_stmt :=
 
 /* ------------------------------------------ */
 /* For statement, returns a node of type: stmt */
+/* A for statement is translated as a while statement, where the initialization is executed before the loop.
+ * The increment expression is executed after the while body executed, outside of its scope. */
 let for_stmt :=
-  | FOR; "("; init = for_init?; SEMICOLON; guard = for_guard; SEMICOLON; incr = expr?; ")"; body = stmt;
+  | FOR; "("; init = for_init; SEMICOLON; guard = for_guard; SEMICOLON; incr = expr?; ")"; body = stmt;
     {
-      let init = Option.value ~default:[] init in
       let body = 
         match incr with
         | Some e ->
@@ -325,10 +327,11 @@ let for_stmt :=
       in
       let while_stmt = annotate (While (guard, body)) $loc in
       let while_stmt = annotate (Stmt while_stmt) $loc in
-      annotate (Block (init @ [while_stmt])) $loc
+      annotate (Block (List.append init [while_stmt])) $loc
     }
 let for_init := // returns a list of stmtordecl nodes
-  | vardecl = vardecl;
+  | { [] }
+  | vardecl = var_definition;
     { List.concat (List.map local_vardecl_builder vardecl) }
   | expr = expr;
     {
@@ -336,8 +339,8 @@ let for_init := // returns a list of stmtordecl nodes
       [ annotate (Stmt expr) $loc ]
     }
 let for_guard := // returns a node of type: expr
-  | guard = expr?;
-    { Option.value ~default:(annotate (BLiteral true) $loc) guard }
+  | { annotate (BLiteral true) $loc }
+  | guard = expr; { guard }
 
 /* ------------------------------------------ */
 /* Expression with comma operator, returns a node of type: expr */
@@ -346,7 +349,7 @@ let expr :=
   | e = lexpr; { annotate (Access e) $loc } //Access to a LExpression
   | e1 = expr; COMMA; e2 = expr; { annotate (CommaOp (e1, e2)) $loc } //Comma Operator
 
-/* Expression without comma operator, returns a node of type: expr */
+/* Expression without comma operator (used for function call arguments), returns a node of type: expr */
 let expr_nc :=
   | e = rexpr(expr_nc); { e } //RExpression
   | e = lexpr; { annotate (Access e) $loc } //Access to a LExpression
@@ -354,22 +357,30 @@ let expr_nc :=
 
 /* LExpression, returns a node of type: access */
 let lexpr :=
+  | "("; e = lexpr; ")"; { e }//Parenthesis
   | id = IDENT; { annotate (AccVar id) $loc } //Identifier access
-  | "("; e = lexpr; ")"; { e } //Parenthesis
-  | "*"; e = lexpr; // Deferencing
+
+  // Deferencing
+  | "*"; e = lexpr;
     {
       let e = annotate (Access e) $loc in
       annotate (AccDeref e) $loc
     } %prec DEFER
-  | "*"; e = aexpr; // Deferencing
+  | "*"; e = aexpr;
     {
       annotate (AccDeref e) $loc
     } %prec DEFER
-  | e = lexpr; "["; index = expr; "]"; // Array Access
+  
+  // Array Access
+  | e = lexpr; "["; index = expr; "]";
     { annotate (AccIndex (e, index)) $loc } %prec ARRAY_SUBSCRIPT
-  | str = lexpr; DOT; field = IDENT; // Struct Access
+ 
+  // Struct Access
+  | str = lexpr; DOT; field = IDENT;
     { annotate (AccDot (str, field)) $loc } %prec STRUCT_ACCESS
-  | e = lexpr; ARROW; field = IDENT; // Struct Dereferencing Access
+  
+  // Struct Dereferencing Access
+  | e = lexpr; ARROW; field = IDENT;
     {
       let e = annotate (Access e) $loc in
       annotate (AccArrow (e, field)) $loc
@@ -377,13 +388,12 @@ let lexpr :=
 
 /* RExpression, parametrized on the expression nonterminal symbol, returns a node of type: expr */
 /* The parametrization is needed to identify the two cases where Comma Operators may occur:
-   comma operators occur differently inside expression than inside function calls arguments. */
+ * comma operators occur differently inside any command than inside function calls arguments. */
 let rexpr(expr_sym) :=
-  //AExpression is RExpression
-  | e = aexpr; { e }
+  | e = aexpr; { e } //AExpression is RExpression
 
   //Function call
-  | fun_id = IDENT; "("; args = fn_call_args; ")";
+  | fun_id = IDENT; "("; args = separated_list(COMMA, expr_nc); ")";
     {
       annotate (Call (fun_id, args)) $loc
     } %prec FN_CALL
@@ -459,12 +469,8 @@ let rexpr(expr_sym) :=
 
   //SizeOf operator
   | SIZEOF; "("; t = adv_typ; ")"; { annotate (SizeOf t) $loc }
-
-/* Function call arguments, returns: expr list */
-let fn_call_args :=
-  | { [] }
-  | e = expr_nc; { [ e ] }
-  | e = expr_nc; COMMA; exprs = fn_call_args; { e :: exprs }
+  | SIZEOF; expr = expr_sym; { annotate (SizeOfExpr expr) $loc }
+  | "("; t = adv_typ; ")"; expr = expr_sym; { annotate (Cast (t, expr)) $loc }
 
 /* ------------------------------------------ */
 /* AExpression, returns a node of type: expr */
