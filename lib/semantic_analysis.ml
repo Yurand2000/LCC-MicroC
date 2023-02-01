@@ -3,8 +3,10 @@ exception Semantic_error of Location.code_pos * string
 open Ast
 open Symbol_table
 
+(* Local types used for Semantic Analysis *)
 type typ =
-    | Int | Float | Bool | Char | Void | Ptr of typ | Array of typ * int option
+    | Int | Float | Bool | Char | Void
+    | Ptr of typ | Array of typ * int option
     | Struct of Ast.identifier
 
 let rec show_typ typ =
@@ -18,11 +20,14 @@ let rec show_typ typ =
     | Array(typ, _) -> "(" ^ show_typ typ ^ "[])"
     | Struct(id) -> "(struct " ^ id ^ ")"
 
+(* Type of data used in the symbol table. *)
 type symbol =
     | StructDef of (typ * Ast.identifier) list
     | FunDef of typ * (typ * Ast.identifier) list
     | VarDef of typ
 
+(* Type checks for various situations. *)
+(* Asserts that the type has been defined in the environment and that array sizes are meaningful. *)
 let rec is_valid_type typ env =
     match typ with
     | Struct(id) -> Option.is_some (lookup_opt id env)
@@ -31,39 +36,52 @@ let rec is_valid_type typ env =
         (Option.fold ~none:true ~some:(fun s -> s > 0) size) &&
         (is_valid_type typ env)
     | _ -> true
+(* Asserts that the type can be used in a variable declaration. *)
 and is_valid_variable_type typ _env =
     match typ with
     | Void -> false
     | Array(typ, size) -> (
-        (Option.fold ~none:true ~some:(fun s -> s > 0) size) &&
+        (Option.fold ~none:false ~some:(fun s -> s > 0) size) &&
         (is_valid_variable_type typ _env)
     )
+    | Ptr(Void) -> true
     | Ptr(typ) -> is_valid_parameter_type typ _env
     | _ -> true
+(* Asserts that the type can be used in return types of functions. *)
 and is_valid_return_type typ _env =
     match typ with
     | Array(_) -> false
+    | Ptr(Void) -> true
     | Ptr(typ) -> is_valid_parameter_type typ _env
     | _ -> true
+(* Asserts that the type can be used as a parameter in a function. *)
 and is_valid_parameter_type typ _env =
     match typ with
     | Void -> false
     | Array(typ, size) -> (
-        match Option.is_none size with
-        | true -> is_valid_parameter_type typ _env
-        | false -> false
+        match size with
+        | None -> is_valid_parameter_type typ _env
+        | Some(_) -> false
     )
+    | Ptr(Void) -> true
     | Ptr(typ) -> is_valid_parameter_type typ _env
     | _ -> true
+(* Asserts that the type can be used as a left expression*)
 and is_valid_lexpr_type typ _env =
     match typ with
-    | Void | Array(_) | Struct(_) -> false
+    | Void | Array(_) -> false
     | _ -> true
 and are_types_equal ltyp rtyp =
-    match (ltyp, rtyp) with
-    | (Array(ltyp, _), Array(rtyp, _)) -> are_types_equal ltyp rtyp
-    | _ -> ltyp = rtyp
+    ltyp = rtyp
+(* Can be 'typ' be implicitly casted to 'ctyp'?*)
+and can_be_implicitly_casted ctyp typ =
+    match (ctyp, typ) with
+    | (Ptr(_), Int)
+    | (Ptr(Void), Ptr(_)) -> true
+    | (Ptr(ctyp), Array(atyp, _)) when are_types_equal ctyp atyp -> true
+    | (ltyp, rtyp) -> are_types_equal ltyp rtyp
 
+(* Trivial conversion from types defined in the AST to the local types. *)
 let rec ast_type_to_typ typ =
     match typ with
     | TypI -> Int
@@ -75,7 +93,8 @@ let rec ast_type_to_typ typ =
     | TypS(id) -> (Struct id)
     | TypV -> Void
 
-let rec lookup_fn_def env id loc =
+(* Lookup for specific definitions from the environment: Functions, Variables and Structs *)
+let rec lookup_function_def env id loc =
     let loc = loc_optional_param loc in
     match lookup_opt id env with
     | Some(FunDef(ret_typ, arg_defs)) -> (ret_typ, arg_defs)
@@ -100,34 +119,34 @@ and loc_optional_param loc =
 let rec tc_expr env expr =
     let loc = expr.loc in
     match expr.node with
+    | ILiteral(_) | FLiteral(_) | CLiteral(_)
+    | BLiteral(_) | SLiteral(_) | SizeOf(_) ->
+        tc_const_expr env expr
     | Access(access) -> tc_access env access
     | Assign(access, expr) -> (
         let (env, access_type) = tc_access env access in
-        match is_valid_lexpr_type access_type env with
-        | true -> (
+        if is_valid_lexpr_type access_type env then
             let (env, expr_type) = tc_expr env expr in
-            match (are_types_equal expr_type access_type) with
-            | true -> (env, expr_type)
+            match (can_be_implicitly_casted access_type expr_type) with
+            | true -> (env, access_type)
             | false -> raise (Semantic_error(expr.loc,
                 "Cannot assign expression of type \"" ^ show_typ expr_type
                 ^ "\" to a variable of type \"" ^ show_typ access_type ^ "\"."))
-        )
-        | false -> raise (Semantic_error(expr.loc,
+        else
+            raise (Semantic_error(expr.loc,
                 "Variables of type \"" ^ show_typ access_type ^ "\" are not assignable."))
     )
     | Addr(access) ->
         let (env, access_type) = tc_access env access in
         (env, Ptr access_type)
-    | UnaryOp(op, expr) -> tc_un_op env tc_expr op expr loc
-    | BinaryOp(op, lexpr, rexpr) -> tc_bin_op env tc_expr op lexpr rexpr loc
-    | CommaOp(lexpr, rexpr) -> 
+    | UnaryOp(op, expr) -> tc_unary_op env tc_expr op expr loc
+    | BinaryOp(op, lexpr, rexpr) -> tc_binary_op env tc_expr op lexpr rexpr loc
+    | CommaOp(lexpr, rexpr) ->
         let (lenv, _) = tc_expr env lexpr in
         tc_expr lenv rexpr
-    | Call(id, args) -> tc_fn_call env id args loc
-    | Cast(_, _) -> raise (Semantic_error(loc, "Type cast not implemented."))
-    | ILiteral(_) | FLiteral(_) | CLiteral(_)
-    | BLiteral(_) | SLiteral(_) | SizeOf(_) | SizeOfExpr(_) ->
-        tc_const_expr env expr
+    | Call(id, args) -> tc_function_call env id args loc
+    | Cast(typ, expr) -> tc_cast_expr env typ expr loc
+(* Type Check expression as const expression: Ast.expr *)
 and tc_const_expr env expr =
     let loc = expr.loc in
     match expr.node with
@@ -141,15 +160,13 @@ and tc_const_expr env expr =
     | BLiteral(_) -> (env, Bool)
     | SLiteral(_) -> (env, Ptr Char)
     | SizeOf(_) -> (env, Int)
-    | SizeOfExpr(_) -> (env, Int)
     | Access(access) -> tc_const_access env access
-    | Addr(access) -> tc_const_access env access
-    | UnaryOp(op, expr) -> tc_un_op env tc_const_expr op expr loc
-    | BinaryOp(op, lexpr, rexpr) -> tc_bin_op env tc_const_expr op lexpr rexpr loc
+    | UnaryOp(op, expr) -> tc_unary_op env tc_const_expr op expr loc
+    | BinaryOp(op, lexpr, rexpr) -> tc_binary_op env tc_const_expr op lexpr rexpr loc
     | _ -> raise (Semantic_error(loc, "Given expression of type cannot be const evaluated."))
 and is_int_literal_valid value =
     (value <= 2147483647) && (value >= -2147483648)
-    
+
 (* Type Check access expression: Ast.access *)
 and tc_access env access =
     let loc = access.loc in
@@ -166,10 +183,13 @@ and tc_access env access =
         let (env, access_type) = tc_access env access in
         let (env, expr_type) = tc_expr env expr in
         match (access_type, expr_type) with
-        | (Array(typ, _), Int) -> (env, typ)
+        | (Ptr(Void), Int) ->
+            raise (Semantic_error(loc, "Void pointer cannot be array accessed. "))
+        | (Array(typ, _), Int)
+        | (Ptr(typ), Int) -> (env, typ)
         | (Array(_), typ) -> raise (Semantic_error(loc, "Array access index is not an integer. "
             ^ "The index expression type is: \"" ^ show_typ typ ^ "\"."))
-        | (typ, _) -> raise (Semantic_error(loc, "Array access requires an array type. "
+        | (typ, _) -> raise (Semantic_error(loc, "Array access requires an array or pointer type. "
         ^ "The expression type is: \"" ^ show_typ typ ^ "\"."))
     )
     | AccDot(access, field) -> (
@@ -186,6 +206,15 @@ and tc_access env access =
         | typ -> raise (Semantic_error(loc, "Arrow operator requires a pointer to struct type"
         ^ "The expression type is: \"" ^ show_typ typ ^ "\"."))
     )
+and search_field_in_struct env str_id field loc =
+    let fields = lookup_struct_def env str_id (Some(loc)) in
+    let field_has_name name (_, id) = (id = name) in
+    match List.find_opt (field_has_name field) fields with
+    | Some((typ, _)) -> typ
+    | None -> raise (Semantic_error(loc, "The struct \"" ^ str_id ^
+        "\" does not contain the field \"" ^ field ^ "\"."))
+
+(* Type Check access expression as const expression: Ast.access *)
 and tc_const_access env access =
     let loc = access.loc in
     match access.node with
@@ -196,20 +225,13 @@ and tc_const_access env access =
         | _ -> raise (Semantic_error(expr.loc, "Given access expression cannot be const evaluated."))
     )
     | _ -> raise (Semantic_error(loc, "Given access expression cannot be const evaluated."))
-and search_field_in_struct env str_id field loc =
-    let fields = lookup_struct_def env str_id (Some(loc)) in
-    let field_has_name name (_, id) = (id = name) in
-    match List.find_opt (field_has_name field) fields with
-    | Some((typ, _)) -> typ
-    | None -> raise (Semantic_error(loc, "The struct \"" ^ str_id ^
-        "\" does not contain the field \"" ^ field ^ "\".")) 
 
 (* Type Check function call expression *)
-and tc_fn_call env fn args loc =
-    let (ret_typ, arg_defs) = lookup_fn_def env fn (Some(loc)) in
-    let (env, arg_types) = tc_fn_args env args in
-    let tc_fn_args argnum (def_type, _) arg_type =
-        match are_types_equal def_type arg_type with
+and tc_function_call env fn args loc =
+    let (ret_typ, arg_defs) = lookup_function_def env fn (Some(loc)) in
+    let (env, arg_types) = tc_function_args env args in
+    let check_function_args argnum (def_type, _) arg_type =
+        match can_be_implicitly_casted def_type arg_type with
         | true -> argnum + 1
         | false -> raise (Semantic_error(loc,
             "Call of fn \"" ^ fn ^ "\", argument #" ^ string_of_int argnum ^ " types do not match: definition type is \""
@@ -217,16 +239,31 @@ and tc_fn_call env fn args loc =
     in
     match (List.length arg_defs) = (List.length arg_types) with
     | true -> (
-        let _ = List.fold_left2 tc_fn_args 0 arg_defs arg_types in
+        let _ = List.fold_left2 check_function_args 0 arg_defs arg_types in
         (env, ret_typ)
     )
     | false -> raise (Semantic_error(loc,
         "Call of fn \"" ^ fn ^ "\", number of provided arguments does not match the number of formal parameters."))
-and tc_fn_args env args =
+and tc_function_args env args =
     List.fold_left_map tc_expr env args
 
+(* Type Check cast expression *)
+and tc_cast_expr env typ expr loc =
+    let (env, expr_type) = tc_expr env expr in
+    let typ = ast_type_to_typ typ in
+    let result = (env, typ) in
+    match (typ, expr_type) with
+    | (Int, Float) | (Float, Int)
+    | (Int, Ptr(_)) | (Ptr(_), Int)
+    | (Ptr(_), Ptr(Void)) | (Ptr(Void), Ptr(_)) ->
+        result
+    | (Ptr(ctyp), Array(atyp, _)) when are_types_equal ctyp atyp ->
+        result
+    | _ -> raise (Semantic_error(loc,
+        "Cast of expression of type \"" ^ show_typ expr_type ^ "\" to type \"" ^ show_typ typ ^ "\" cannot be performed. "))
+
 (* Type Check unary operation expression *)
-and tc_un_op env tc_fn op expr loc =
+and tc_unary_op env tc_fn op expr loc =
     let (env, expr_type) = tc_fn env expr in
     match op with
     | Pos | Neg -> (
@@ -246,10 +283,10 @@ and tc_un_op env tc_fn op expr loc =
     )
 and raise_un_op_error loc op typ =
     raise (Semantic_error(loc, "Unary operator \"" ^ Ast.show_uop op ^
-        "\"cannot be applied to the expression of type \"" ^ show_typ typ ^ "\".")) 
+        "\"cannot be applied to the expression of type \"" ^ show_typ typ ^ "\"."))
 
 (* Type Check binary operation expression *)
-and tc_bin_op env tc_fn op lexpr rexpr loc =
+and tc_binary_op env tc_fn op lexpr rexpr loc =
     let (env, ltype) = tc_fn env lexpr in
     let (env, rtype) = tc_fn env rexpr in
     match op with
@@ -293,9 +330,7 @@ and tc_bin_op env tc_fn op lexpr rexpr loc =
         | (Bool, Bool) -> (env, ltype)
         | _ -> raise_bin_op_error loc op ltype rtype
     )
-    | Equal | Neq
-    | Less | Leq
-    | Greater | Geq -> (
+    | Equal | Neq -> (
         match (ltype, rtype) with
         | (Bool, Bool) | (Int, Int) | (Char, Char) | (Float, Float)
         | (Ptr(_), Int) | (Int, Ptr(_)) -> (env, Bool)
@@ -303,13 +338,26 @@ and tc_bin_op env tc_fn op lexpr rexpr loc =
             match (are_types_equal ltyp rtyp) with
             | true -> (env, Bool)
             | false -> raise (Semantic_error(loc, "Binary comparison between pointers must have are_types_equal types. " ^
-                "The two pointers have types \"" ^ show_typ ltype ^ "\" and \"" ^ show_typ rtype ^ "\"."))            
+                "The two pointers have types \"" ^ show_typ ltype ^ "\" and \"" ^ show_typ rtype ^ "\"."))
+        )
+        | _ -> raise_bin_op_error loc op ltype rtype
+    )
+    | Less | Leq
+    | Greater | Geq -> (
+        match (ltype, rtype) with
+        | (Int, Int) | (Char, Char) | (Float, Float)
+        | (Ptr(_), Int) | (Int, Ptr(_)) -> (env, Bool)
+        | (Ptr(ltyp), Ptr(rtyp)) -> (
+            match (are_types_equal ltyp rtyp) with
+            | true -> (env, Bool)
+            | false -> raise (Semantic_error(loc, "Binary comparison between pointers must have are_types_equal types. " ^
+                "The two pointers have types \"" ^ show_typ ltype ^ "\" and \"" ^ show_typ rtype ^ "\"."))
         )
         | _ -> raise_bin_op_error loc op ltype rtype
     )
 and raise_bin_op_error loc op ltyp rtyp =
     raise (Semantic_error(loc, "Binary operator \"" ^ Ast.show_binop op ^
-        "\"cannot be applied to expressions of type \"" ^ show_typ ltyp ^ "\" and \"" ^ show_typ rtyp ^ "\".")) 
+        "\"cannot be applied to expressions of type \"" ^ show_typ ltyp ^ "\" and \"" ^ show_typ rtyp ^ "\"."))
 
 (* Type Check statement or declaration node: Ast.stmtordecl *)
 let rec tc_stmt_or_decl env stmt_or_decl ret_typ =
@@ -325,28 +373,22 @@ and tc_stmt env stmt ret_typ =
         let (env, guard_typ) = tc_expr env guard in
         match guard_typ with
         | Bool -> (
-            let env = begin_block env in
             let (env, then_returns) = tc_stmt env then_stmt ret_typ in
-            let env = end_block env in
-
-            let env = begin_block env in
             let (env, else_returns) = tc_stmt env else_stmt ret_typ in
-            let env = end_block env in
 
             match (then_returns, else_returns) with
             | (false, _) | (_, false) -> (env, false)
             | _ -> (env, true)
         )
         | typ -> raise (Semantic_error(loc, "If guard expression type must be a boolean. "
-            ^ "The expression type is: \"" ^ show_typ typ ^ "\".")) 
+            ^ "The expression type is: \"" ^ show_typ typ ^ "\"."))
     )
     | While(guard, stmt) -> (
         let (env, guard_typ) = tc_expr env guard in
         match guard_typ with
-        | Bool -> 
-            let env = begin_block env in
+        | Bool ->
             let (env, _) = tc_stmt env stmt ret_typ in
-            (end_block env, false)
+            (env, false)
         | typ -> raise (Semantic_error(loc, "While guard expression type must be a boolean. "
             ^ "The expression type is: \"" ^ show_typ typ ^ "\"."))
     )
@@ -357,7 +399,7 @@ and tc_stmt env stmt ret_typ =
         match expr with
         | Some(expr) -> (
             let (env, expr_typ) = tc_expr env expr in
-            match are_types_equal expr_typ ret_typ with
+            match can_be_implicitly_casted ret_typ expr_typ with
             | true -> (env, true)
             | false -> raise (Semantic_error(loc, "Return expression type must match the function return type. "
                 ^ "The exprected return type is \"" ^ show_typ ret_typ ^ "\" and the expression type is: \"" ^ show_typ expr_typ ^ "\"."))
@@ -392,7 +434,7 @@ and tc_local_decl env (var_typ, id) loc =
     | (true, true) -> (add_entry id (VarDef var_typ) env, false)
 
 (* Type Check whole program declaration: Ast.program *)
-let rec tc_program program = 
+let rec tc_program program =
     let split_topdecls (vlist, slist, flist) topdecl =
         let loc = topdecl.loc in
         match topdecl.node with
@@ -433,7 +475,7 @@ and process_struct_defs env defs =
         let defs_size = List.length defs in
         match (defs_size, prec_defs_size = defs_size) with
         | (0, _) -> env
-        | (_, true) -> raise (Semantic_error(Location.dummy_code_pos, "Some struct definitions are recursive. ")) 
+        | (_, true) -> raise (Semantic_error(Location.dummy_code_pos, "Some struct definitions are recursive. "))
         | (_, false) -> (
             let (usable, unusable) = List.partition (is_struct_valid env) defs in
             let type_check_struct env def =
@@ -467,7 +509,7 @@ and process_function_defs env defs =
         tc_func_def env (id, ret_typ, formals) loc
     in
     List.fold_left process_function env defs
-    
+
 (* Type Check function declaration: { typ : Ast.typ; fname : string; formals : (Ast.typ * Ast.identifier) list; body : Ast.stmt; } *)
 and tc_func_def env (id, ret_typ, formals) loc =
     let tc_func_ret_type env ret_typ =
@@ -488,7 +530,7 @@ and tc_func_def env (id, ret_typ, formals) loc =
     let (formals, is_valid) = List.fold_right (tc_func_param_def env) formals ([], is_valid) in
     match is_valid with
     | true -> add_entry id (FunDef (ret_typ, formals)) env
-    | false -> raise (Semantic_error(loc, "Function \"" ^ id ^ "\" formal parameters are incorrect. ")) 
+    | false -> raise (Semantic_error(loc, "Function \"" ^ id ^ "\" formal parameters are incorrect. "))
 
 and process_function_bodies env defs =
     let process_function env (id, _, _, body, loc) =
@@ -501,11 +543,11 @@ and tc_func_body env (id, body) loc =
     let add_formals_to_env env (typ, id) =
         add_entry id (VarDef(typ)) env
     in
-    let (ret_typ, arg_defs) = lookup_fn_def env id (Some(loc)) in
+    let (ret_typ, arg_defs) = lookup_function_def env id (Some(loc)) in
 
     let env = begin_block env in
     let env = List.fold_left add_formals_to_env env arg_defs in
-    let (env, returns) = 
+    let (env, returns) =
         match body.node with
         | Block(stmts) -> tc_block_stmt env stmts ret_typ
         | _ -> tc_stmt env body ret_typ
@@ -513,7 +555,7 @@ and tc_func_body env (id, body) loc =
     let env = end_block env in
     match (ret_typ, returns) with
     | (_, true) | (Void, _) -> env
-    | _ -> raise (Semantic_error(loc, "Function \"" ^ id ^ "\" is missing some return expression. ")) 
+    | _ -> raise (Semantic_error(loc, "Function \"" ^ id ^ "\" is missing some return expression. "))
 
 and process_global_variable_defs env defs =
     let process_variable env (typ, id, expr, loc) =
@@ -538,21 +580,22 @@ and tc_var_decl env (var_typ, id, expr) loc =
         )
         | None -> add_entry id (VarDef var_typ) env
     )
-    
 
-(* Type Check whole program declaration: Ast.program *)
-let type_check program = 
-    let env = tc_program program in
+(* Check if a correctly defined main function is available. *)
+let tc_main_defined program env =
     match lookup_opt "main" env with
     | Some(FunDef(ret_typ, arg_def_types)) -> (
-        let _ = match ret_typ with
-            | Int | Void -> true
-            | _ -> raise (Semantic_error(Location.dummy_code_pos, "Main function return type must be void or int. "))
-        in
-        let _ = match arg_def_types with
-            | [] -> true
-            | _ -> raise (Semantic_error(Location.dummy_code_pos, "Main function has no formal parameters. "))
-        in
-        program
+        match (ret_typ, arg_def_types) with
+            | (Int, [])
+            | (Void, []) -> program
+            | (Int, _::_)
+            | (Void, _::_) -> raise (Semantic_error(Location.dummy_code_pos, "Main function must have no formal parameters. "))
+            | (_, _) -> raise (Semantic_error(Location.dummy_code_pos, "Main function return type must be void or int. "))
     )
     | _ -> raise (Semantic_error(Location.dummy_code_pos, "Main function is not defined. "))
+
+(* Type Check whole program declaration: Ast.program *)
+let type_check program =
+    let env = tc_program program in
+    let program = tc_main_defined program env in
+    Const_expr_solver.solve_const_expressions program

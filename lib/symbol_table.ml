@@ -1,12 +1,13 @@
 exception DuplicateEntry of Ast.identifier
 exception EntryNotFound of Ast.identifier
 
+(* A symbol table is a list of lists, where the inner lists keep the identifiers available in each scope. *)
 type 'a t = ((Ast.identifier * 'a) list) list
 
+(* Auxiliary function to lookup for a given id in a list *)
 let lookup_in_block block name =
     let is_same_name (id, _) = (name = id) in
     List.find_opt is_same_name block
-
 let empty_table = [ [] ]
 
 let begin_block env = [] :: env

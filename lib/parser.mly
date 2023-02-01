@@ -469,7 +469,6 @@ let rexpr(expr_sym) :=
 
   //SizeOf operator
   | SIZEOF; "("; t = adv_typ; ")"; { annotate (SizeOf t) $loc }
-  | SIZEOF; expr = expr_sym; { annotate (SizeOfExpr expr) $loc }
   | "("; t = adv_typ; ")"; expr = expr_sym; { annotate (Cast (t, expr)) $loc }
 
 /* ------------------------------------------ */

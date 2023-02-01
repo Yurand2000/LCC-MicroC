@@ -400,7 +400,7 @@ and cg_expr (ctx, bld) (typs, env) expr = (* Expressions *)
     let loc = expr.loc in
     match expr.node with
     | ILiteral(_) | FLiteral(_) | CLiteral(_)
-    | BLiteral(_) | SLiteral(_) | SizeOf(_) | SizeOfExpr(_) ->
+    | BLiteral(_) | SLiteral(_) | SizeOf(_) ->
         cg_literals ctx typs expr
 
     | Access(access) -> (
@@ -482,7 +482,7 @@ and cg_array_access (ctx, bld) (typs, env) access expr =
 and cg_const_expr ctx (typs, env) expr = (* Constant Expressions *)
     match expr.node with
     | ILiteral(_) | FLiteral(_) | CLiteral(_)
-    | BLiteral(_) | SLiteral(_) | SizeOf(_) | SizeOfExpr(_) ->
+    | BLiteral(_) | SLiteral(_) | SizeOf(_) ->
         cg_literals ctx typs expr
     | Access(access) ->
         cg_const_access ctx (typs, env) access
@@ -515,8 +515,6 @@ and cg_literals ctx typs expr = (* Literal Expressions *)
     | SizeOf(typ) ->
         let lltype = get_llvm_type typs (get_local_typ typ) in
         (get_size_of_type typs lltype, Int)
-    | SizeOfExpr(expr) ->
-        raise (sem_error "SizeOfExpr Literal evaluation must be done before code generation." expr.loc)
     | _ ->
         raise (sem_error "Literal evaluation unexpected error" expr.loc)
 

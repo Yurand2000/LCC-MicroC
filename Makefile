@@ -26,7 +26,7 @@ clean: ## Clean build artifacts and other generated files
 	opam exec -- dune clean --root .
 
 .PHONY: doc
-doc: ## Generate odoc documentation
+doc: build ## Generate odoc documentation
 	opam exec -- dune build --root . @doc
 
 .PHONY: servedoc

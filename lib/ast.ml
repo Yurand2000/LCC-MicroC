@@ -47,7 +47,6 @@ and expr_node =
   | CommaOp of expr * expr (* Comma operator *)
   | Call of identifier * expr list (* Function call f(...)    *)
   | SizeOf of typ
-  | SizeOfExpr of expr
   | Cast of typ * expr
 [@@deriving show]
 

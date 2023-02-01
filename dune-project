@@ -4,9 +4,9 @@
 
 (generate_opam_files true)
 
-(authors "LCI-2022")
+(authors "Yuri Andriaccio, LCI-2022")
 
-(maintainers "LCI-2022")
+(maintainers "Yuri Andriaccio, LCI-2022")
 
 (license ISC)
 
