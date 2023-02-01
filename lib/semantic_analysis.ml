@@ -597,5 +597,6 @@ let tc_main_defined program env =
 (* Type Check whole program declaration: Ast.program *)
 let type_check program =
     let env = tc_program program in
-    let program = tc_main_defined program env in
-    Const_expr_solver.solve_const_expressions program
+    tc_main_defined program env |>
+    Const_expr_solver.solve_const_expressions
+    

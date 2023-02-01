@@ -1,3 +1,5 @@
+(** List of tokens generated from the Tokenizer *)
+
 type token =
 (* Keywords and base types *)
 | IF | ELSE

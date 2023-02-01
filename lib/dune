@@ -1,5 +1,6 @@
 (library
  (name microc)
+ (public_name microc-lang)
  (libraries llvm llvm.analysis llvm.scalar_opts)
  (preprocess
   (pps ppx_deriving.show ppx_deriving.ord ppx_deriving.eq)))
