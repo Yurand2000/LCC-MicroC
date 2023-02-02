@@ -30,4 +30,7 @@ let lookup_struct_def env id loc =
 let make_default_env env =
     env |>
     add_entry "print" ( FunDef (Void, [(Int, "value")]) ) |>
-    add_entry "getint" ( FunDef (Int, []) )
+    add_entry "getint" ( FunDef (Int, []) ) |>
+    add_entry "print_string" ( FunDef (Void, [(Ptr Char, "string")]) ) |>
+    add_entry "mem_alloc" ( FunDef (Ptr Void, [(Int, "size")]) ) |>
+    add_entry "mem_free" ( FunDef (Void, [(Ptr Void, "ptr")]) )
