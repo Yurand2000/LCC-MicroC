@@ -1,8 +1,61 @@
 open Ast
 
+(* Helper function *)
 let annotate node loc = { node = node; loc = loc }
 
-let rec solve_expr expr =
+(* Main Solver Function *)
+let rec solve_const_expressions program =
+    let topdecls = match program with
+    | Prog(topdecls) -> topdecls
+    in
+    let solve_gvar_decl topdecl =
+        let loc = topdecl.loc in
+        let topdecl = match topdecl.node with
+            | Vardec(typ, id, expr) -> solve_global_variable typ id expr
+            | _ -> topdecl.node
+        in
+        annotate topdecl loc
+    in
+    let solve_fn_bodies topdecl =
+        let loc = topdecl.loc in
+        let topdecl =
+            match topdecl.node with
+            | Fundecl(decl) -> solve_function_definition decl
+            | _ -> topdecl.node
+        in
+        annotate topdecl loc
+    in
+    let topdecls = List.map solve_gvar_decl topdecls in
+    let topdecls = List.map solve_fn_bodies topdecls in
+    Prog(topdecls)
+
+and solve_global_variable typ id expr =
+    Vardec (typ, id, Option.map solve_expr expr)
+
+and solve_function_definition { typ=typ; fname=fname; formals=formals; body=body; } =
+    Fundecl { typ=typ; fname=fname; formals=formals; body=solve_stmt body; }
+
+and solve_stmt stmt =
+    let loc = stmt.loc in
+    let stmt = match stmt.node with
+    | If(guard, t_branch, e_branch) -> If(solve_expr guard, solve_stmt t_branch, solve_stmt e_branch)
+    | While(guard, body) -> While(solve_expr guard, solve_stmt body)
+    | Expr(expr) -> Expr(solve_expr expr)
+    | Return(Some(expr)) -> Return(Some(solve_expr expr))
+    | Block(stmts) -> Block(List.map solve_stmt_or_decl stmts)
+    | _ -> stmt.node
+    in
+    annotate stmt loc     
+
+and solve_stmt_or_decl stmt_or_decl =
+    let loc = stmt_or_decl.loc in
+    let stmt_or_decl = match stmt_or_decl.node with
+        | Dec(_) -> stmt_or_decl.node
+        | Stmt(stmt) -> Stmt(solve_stmt stmt)
+    in
+    annotate stmt_or_decl loc
+
+and solve_expr expr =
     let loc = expr.loc in
     let new_expr = match expr.node with
     | Access(_) -> expr.node
@@ -79,54 +132,3 @@ and solve_cast_expr typ expr =
     | (Ast.TypI, FLiteral(value)) -> ILiteral(Int.of_float value)
     | (Ast.TypF, ILiteral(value)) -> FLiteral(Int.to_float value)
     | _ -> Cast(typ, expr)
-
-let rec solve_stmt stmt =
-    let loc = stmt.loc in
-    let stmt = match stmt.node with
-    | If(guard, t_branch, e_branch) -> If(solve_expr guard, solve_stmt t_branch, solve_stmt e_branch)
-    | While(guard, body) -> While(solve_expr guard, solve_stmt body)
-    | Expr(expr) -> Expr(solve_expr expr)
-    | Return(Some(expr)) -> Return(Some(solve_expr expr))
-    | Block(stmts) -> Block(List.map solve_stmt_or_decl stmts)
-    | _ -> stmt.node
-    in
-    annotate stmt loc     
-
-and solve_stmt_or_decl stmt_or_decl =
-    let loc = stmt_or_decl.loc in
-    let stmt_or_decl = match stmt_or_decl.node with
-        | Dec(_) -> stmt_or_decl.node
-        | Stmt(stmt) -> Stmt(solve_stmt stmt)
-    in
-    annotate stmt_or_decl loc
-
-let solve_global_variable typ id expr =
-    Vardec (typ, id, Option.map solve_expr expr)
-
-let solve_function_definition { typ=typ; fname=fname; formals=formals; body=body; } =
-    Fundecl { typ=typ; fname=fname; formals=formals; body=solve_stmt body; }
-
-let solve_const_expressions program =
-    let topdecls = match program with
-    | Prog(topdecls) -> topdecls
-    in
-    let solve_gvar_decl topdecl =
-        let loc = topdecl.loc in
-        let topdecl = match topdecl.node with
-            | Vardec(typ, id, expr) -> solve_global_variable typ id expr
-            | _ -> topdecl.node
-        in
-        annotate topdecl loc
-    in
-    let solve_fn_bodies topdecl =
-        let loc = topdecl.loc in
-        let topdecl =
-            match topdecl.node with
-            | Fundecl(decl) -> solve_function_definition decl
-            | _ -> topdecl.node
-        in
-        annotate topdecl loc
-    in
-    let topdecls = List.map solve_gvar_decl topdecls in
-    let topdecls = List.map solve_fn_bodies topdecls in
-    Prog(topdecls)
