@@ -1,6 +1,5 @@
 exception Semantic_error of Location.code_pos * string
 
-open Either
 open Ast
 open Symbol_table
 open Sa_local_types
