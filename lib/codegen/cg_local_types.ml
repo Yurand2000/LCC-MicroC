@@ -45,13 +45,19 @@ and get_array_dims typ =
         (typ, inner_dimentions + 1)
     | _ -> (get_local_typ typ, 0)
 
+let rec is_nested_ptr ptr_typ data_typ depth =
+    match ptr_typ with
+    | Ptr(typ) -> is_nested_ptr typ data_typ (depth - 1)
+    | typ when depth = 0 -> typ = data_typ
+    | _ -> false
+
 (* Types to Llvm types *)
 let rec get_llvm_type typs typ =
     match typ with
     | Int -> lookup_type "@i32" typs
     | Float -> lookup_type "@f32" typs
     | Bool -> lookup_type "@bool" typs
-    | Char -> lookup_type "@i8" typs
+    | Char -> lookup_type "@char" typs
     | Void -> lookup_type "@void" typs
     | Struct(id) -> lookup_type id typs
     | Ptr(typ) -> Llvm.pointer_type (get_llvm_type typs typ)

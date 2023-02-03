@@ -80,7 +80,7 @@ and cg_fun_decl (_ctx, md) (typs, env) { typ=ret_typ; fname=fn_name; formals=for
     let fn_type = Fun (ret_typ, formals) in
 
     (* Add function to the environment *)
-    (typs, declare_llvm_fn (_ctx, md) (typs, env) fn_name fn_type)
+    (typs, define_llvm_fn (_ctx, md) (typs, env) fn_name fn_type)
 
 (* Generate code for Function definition *)
 and cg_fun_def (ctx, md) (typs, env) { typ=_; fname=id; formals=formals; body=body; } =
@@ -255,6 +255,10 @@ and cg_expr (ctx, bld) (typs, env) expr =
     | Assign(access, expr) -> (
         let (expr, expr_typ) = cg_expr (ctx, bld) (typs, env) expr in
         let (addr, access_typ) = cg_access (ctx, bld) (typs, env) access in
+        let access_typ = match access_typ with
+            | Ptr(typ) -> typ
+            | _ -> raise_error "Access didn't return a pointer" loc
+        in
         let (expr, expr_typ) = cg_implicit_cast_expr (ctx, bld) (typs, env) access_typ (expr, expr_typ) loc in
         let _ = Llvm.build_store expr addr bld in
         (expr, expr_typ)
@@ -290,8 +294,6 @@ and cg_access (ctx, bld) (typs, env) access =
         | Ptr(Struct(struct_id)) -> cg_struct_access (ctx, bld) typs addr struct_id field_id
         | _ -> raise_error "Access address is not a pointer to struct" access.loc
     )
-and cg_address_of (ctx, bld) (var, typ) =
-    (Llvm.build_gep var [|const_zero ctx|] "addr_of" bld, Ptr(typ))
 and cg_struct_access (_ctx, bld) typs addr struct_id field_id =
     let (field_index, field_typ) = lookup_struct_field struct_id field_id typs in
     let addr = Llvm.build_struct_gep addr field_index "struct_access" bld in
@@ -353,7 +355,9 @@ and cg_fn_call (ctx, bld) (typs, env) id args loc =
     in
     let args = List.map (cg_expr (ctx, bld) (typs, env)) args in
     let args = List.map2 args_implicit_cast args arg_typs in
-    (Llvm.build_call fn (Array.of_list args) "fn_call" bld, ret_typ)
+    match ret_typ with
+    | Void -> (Llvm.build_call fn (Array.of_list args) "" bld, ret_typ)
+    | _ -> (Llvm.build_call fn (Array.of_list args) "fn_call" bld, ret_typ)
 
 (* Codegen Cast expression *)
 and cg_cast_expr (ctx, bld) (typs, env) _cast_type _expr loc =
@@ -366,31 +370,38 @@ and cg_cast_expr (ctx, bld) (typs, env) _cast_type _expr loc =
         (Llvm.build_sitofp expr (get_llvm_type typs cast_type) "cast" bld, cast_type)
     | (Int, Ptr(_)) ->
         (Llvm.build_ptrtoint expr (get_llvm_type typs cast_type) "cast" bld, cast_type)
+    | (Ptr(_), Int) ->
+        (Llvm.build_inttoptr expr (get_llvm_type typs cast_type) "cast" bld, cast_type)
     | (Ptr(_), Ptr(Void)) ->
         (Llvm.build_pointercast expr (get_llvm_type typs cast_type) "cast" bld, cast_type)
 
     (* Implicit casts *)
-    | (Ptr(_), Int) | (Ptr(Void), Ptr(_)) ->
+    | (Ptr(Void), Ptr(_)) ->
         cg_implicit_cast_expr (ctx, bld) (typs, env) cast_type (expr, expr_type) loc
     | (Ptr(ctyp), Ptr(Array(atyp, _))) when ctyp = atyp ->
         cg_implicit_cast_expr (ctx, bld) (typs, env) cast_type (expr, expr_type) loc
+    | (Ptr(Array(ctyp, _)), Ptr(atyp)) when ctyp = atyp ->
+        cg_implicit_cast_expr (ctx, bld) (typs, env) cast_type (expr, expr_type) loc
     | _ when cast_type = expr_type ->
         cg_implicit_cast_expr (ctx, bld) (typs, env) cast_type (expr, expr_type) loc
-    | _ -> raise_error "Unexpected cast operation" loc
+    | _ ->
+        raise_error ("Unexpected cast operation: " ^ show_typ expr_type ^ " to " ^ show_typ cast_type) loc
 
 (* Codegen implicit cast *)
 and cg_implicit_cast_expr (_ctx, bld) (typs, _env) cast_type (expr, expr_type) loc =
     match (cast_type, expr_type) with
-    | (Ptr(_), Int) ->
-        (Llvm.build_inttoptr expr (get_llvm_type typs cast_type) "implicit_cast" bld, cast_type)
     | (Ptr(Void), Ptr(_)) ->
         (Llvm.build_pointercast expr (get_llvm_type typs cast_type) "implicit_cast" bld, cast_type)
-    | (Ptr(ctyp), Ptr(Array(atyp, _))) when ctyp = atyp ->
+    | (Ptr(_), Ptr(Array(atyp, sizes))) when is_nested_ptr cast_type atyp (List.length sizes) ->
+        (Llvm.build_pointercast expr (get_llvm_type typs cast_type) "implicit_cast" bld, cast_type)
+    | (ArrayRef(ctyp, dims), Ptr(_)) when is_nested_ptr expr_type ctyp dims ->
+        (Llvm.build_pointercast expr (get_llvm_type typs cast_type) "implicit_cast" bld, cast_type)
+    | (ArrayRef(ctyp, dims), Ptr(Array(atyp, sizes))) when ctyp = atyp && dims = (List.length sizes) ->
         (Llvm.build_pointercast expr (get_llvm_type typs cast_type) "implicit_cast" bld, cast_type)
     | _ when cast_type = expr_type ->
         (expr, expr_type)
     | _ ->
-        raise_error "Unexpected implicit cast operation" loc
+        raise_error ("Unexpected implicit cast operation: " ^ show_typ expr_type ^ " to " ^ show_typ cast_type) loc
 
 (* Codegen Unary Operator Expressions *)
 and cg_un_op (ctx, bld) (typs, env) op expr loc =  

@@ -88,12 +88,14 @@ and is_valid_lexpr_type typ _env =
 
 (* Are two types equal? *)
 and are_types_equal ltyp rtyp =
-    ltyp = rtyp
+    match (ltyp, rtyp) with
+    | (Array(ltyp, _), Array(rtyp, _)) -> ltyp = rtyp
+    | _ -> ltyp = rtyp
 
 (* Can a type be implicitly casted to another type? (typ is casted to ctyp) *)
 and can_be_implicitly_casted ctyp typ =
     match (ctyp, typ) with
-    | (Ptr(_), Int)
     | (Ptr(Void), Ptr(_)) -> true
-    | (Ptr(ctyp), Array(atyp, _)) when are_types_equal ctyp atyp -> true
-    | (ltyp, rtyp) -> are_types_equal ltyp rtyp
+    | (Ptr(ctyp), Array(atyp, _)) when can_be_implicitly_casted ctyp atyp -> true
+    | (Array(ctyp, _), Ptr(atyp)) when can_be_implicitly_casted ctyp atyp -> true
+    | _ -> are_types_equal ctyp typ

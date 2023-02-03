@@ -17,7 +17,7 @@ void print_string(char *string) {
 }
 
 void *mem_alloc(int size) {
-    return malloc((size_t size));
+    return malloc((size_t)size);
 }
 
 void mem_free(void *ptr) {

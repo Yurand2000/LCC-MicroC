@@ -17,6 +17,12 @@ let declare_llvm_fn (_ctx, md) (typs, env) fn_name fn_type =
     let fn_decl = Llvm.declare_function fn_name fn_lltyp md in
     add_entry fn_name (fn_decl, fn_type) env
 
+(* Codegen LLVM function definition *)
+let define_llvm_fn (_ctx, md) (typs, env) fn_name fn_type =
+    let fn_lltyp = get_llvm_type typs fn_type in
+    let fn_decl = Llvm.define_function fn_name fn_lltyp md in
+    add_entry fn_name (fn_decl, fn_type) env
+
 (* Codegen default value for a given type *)
 let rec cg_default_value typs typ =
     match typ with
