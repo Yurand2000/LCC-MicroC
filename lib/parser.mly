@@ -116,7 +116,7 @@
 %left SHIFT_LEFT SHIFT_RIGHT
 %left PLUS MINUS
 %left TIMES DIV MOD
-%right PRE_INCR_DECR UPLUS UMINUS NOT BIT_NOT DEFER ADDR_OF SIZEOF
+%right PRE_INCR_DECR UPLUS UMINUS NOT BIT_NOT DEREF ADDR_OF SIZEOF
 %left POST_INCR_DECR FN_CALL ARRAY_SUBSCRIPT STRUCT_ACCESS
 
 %left DOT ARROW
@@ -360,30 +360,45 @@ let lexpr :=
   | "("; e = lexpr; ")"; { e }//Parenthesis
   | id = IDENT; { annotate (AccVar id) $loc } //Identifier access
 
-  // Deferencing
+  // Dereferencing
   | "*"; e = lexpr;
     {
       let e = annotate (Access e) $loc in
       annotate (AccDeref e) $loc
-    } %prec DEFER
+    } %prec DEREF
   | "*"; e = aexpr;
     {
       annotate (AccDeref e) $loc
-    } %prec DEFER
+    } %prec DEREF
   
-  // Array Access
+  // Array/Pointer Access
   | e = lexpr; "["; index = expr; "]";
-    { annotate (AccIndex (e, index)) $loc } %prec ARRAY_SUBSCRIPT
+    {
+      annotate (AccIndex (e, index)) $loc
+    } %prec ARRAY_SUBSCRIPT
+  | e = aexpr; "["; index = expr; "]";
+    {
+      let p = annotate (AccDeref e) $loc in
+      annotate (AccIndex (p, index)) $loc
+    } %prec ARRAY_SUBSCRIPT
  
   // Struct Access
-  | str = lexpr; DOT; field = IDENT;
-    { annotate (AccDot (str, field)) $loc } %prec STRUCT_ACCESS
-  
+  | e = lexpr; DOT; field = IDENT;
+    {
+      annotate (AccStruct (e, field)) $loc
+    } %prec STRUCT_ACCESS
+
   // Struct Dereferencing Access
   | e = lexpr; ARROW; field = IDENT;
     {
       let e = annotate (Access e) $loc in
-      annotate (AccArrow (e, field)) $loc
+      let p = annotate (AccDeref e) $loc in
+      annotate (AccStruct (p, field)) $loc
+    } %prec STRUCT_ACCESS
+  | e = aexpr; ARROW; field = IDENT;
+    {
+      let p = annotate (AccDeref e) $loc in
+      annotate (AccStruct (p, field)) $loc
     } %prec STRUCT_ACCESS
 
 /* RExpression, parametrized on the expression nonterminal symbol, returns a node of type: expr */

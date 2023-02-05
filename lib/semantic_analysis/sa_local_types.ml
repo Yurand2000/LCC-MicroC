@@ -44,8 +44,13 @@ let rec is_valid_type typ env =
     | Ptr(typ) -> is_valid_type typ env
     | Array(typ, size) ->
             (Option.fold ~none:true ~some:(fun s -> s > 0) size) &&
-            (is_valid_type typ env)
+            (is_valid_type typ env) && (Bool.not (is_array_type typ env))
     | _ -> true
+
+and is_array_type typ _env =
+    match typ with
+    | Array(_) -> true
+    | _ -> false
 
 (* Asserts that the type can be used as variable type. *)
 and is_valid_variable_type typ _env =

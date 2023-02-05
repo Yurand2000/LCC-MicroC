@@ -24,7 +24,7 @@ for file in $2*; do
     if [[ "$file" == */test-*.mc ]]; then
         echo -ne "                                             \r";
         echo -ne "Compiling $file \r";
-        if "$1" -dir "$3" -rt "$RTOUT" -o "$3/a.out" -O "$file"; then
+        if "$1" -dir "$3" -rt "$RTOUT" -o "$3/a.out" -O "$file" -verify; then
             FILE="${file%.*}.out"
             if [[ -f "$FILE" ]]; then
                 echo -ne "                                             \r";

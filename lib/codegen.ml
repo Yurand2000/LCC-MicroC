@@ -277,52 +277,30 @@ and cg_access (ctx, md, bld) (typs, env) access =
     match access.node with
     | AccVar(id) -> lookup id env
     | AccDeref(expr) -> cg_expr (ctx, md, bld) (typs, env) expr
-    | AccIndex(access, expr) -> (
-        let (addr, data_typ, indices) = cg_array_access (ctx, md, bld) (typs, env) access expr in
-        (Llvm.build_gep addr (Array.of_list indices) "array_access" bld, Ptr(data_typ))
+    | AccIndex(access, index_expr) -> (
+        let (index, _) = cg_expr (ctx, md, bld) (typs, env) index_expr in
+        let (addr, addr_typ) = (cg_access (ctx, md, bld) (typs, env) access) in
+        match addr_typ with
+        | Ptr(Array(data_typ, _)) ->
+            (Llvm.build_gep addr [| const_zero typs; index |] "array_access" bld, Ptr(data_typ))
+        | Ptr(Ptr(data_typ)) ->
+            let addr = Llvm.build_load addr "deref" bld in
+            (Llvm.build_gep addr [| index |] "array_access" bld, Ptr(data_typ))
+        | Ptr(data_typ) ->
+            (Llvm.build_gep addr [| index |] "array_access" bld, Ptr(data_typ))
+        | _ ->
+            raise_error ("Pointer or array pointer expected, found: " ^ show_typ addr_typ) access.loc
     )
-    | AccDot(access, field_id) -> (
+    | AccStruct(access, field_id) -> (
         let (addr, addr_typ) = cg_access (ctx, md, bld) (typs, env) access in
         match addr_typ with
         | Ptr(Struct(struct_id)) -> cg_struct_access (ctx, md, bld) typs addr struct_id field_id
-        | _ -> raise_error "Access address is not a pointer to struct" access.loc
-    )
-    | AccArrow(expr, field_id) -> (
-        let (addr, addr_typ) = cg_expr (ctx, md, bld) (typs, env) expr in
-        match addr_typ with
-        | Ptr(Struct(struct_id)) -> cg_struct_access (ctx, md, bld) typs addr struct_id field_id
-        | _ -> raise_error "Access address is not a pointer to struct" access.loc
+        | _ -> raise_error ("Access address is not a pointer to struct, found: " ^ show_typ addr_typ) access.loc
     )
 and cg_struct_access (_ctx, _md, bld) typs addr struct_id field_id =
     let (field_index, field_typ) = lookup_struct_field struct_id field_id typs in
     let addr = Llvm.build_struct_gep addr field_index "struct_access" bld in
     (addr, Ptr(field_typ))
-and cg_array_access (ctx, md, bld) (typs, env) access expr =
-    let rec cg_array_access_rec (ctx, md, bld) (typs, env) access expr =
-        let (index, _) = cg_expr (ctx, md, bld) (typs, env) expr in
-        match access.node with
-        | AccIndex(access, expr) -> (
-            let (addr, data_typ, array_access, indices) = cg_array_access_rec (ctx, md, bld) (typs, env) access expr in
-            (addr, data_typ, array_access, index :: indices)
-        )
-        | _ -> (
-            let (addr, addr_typ) = (cg_access (ctx, md, bld) (typs, env) access) in
-            match addr_typ with
-            | Ptr(ArrayRef(typ, _)) ->
-                let addr = Llvm.build_load addr "deref" bld in
-                (addr, typ, [ const_zero typs ], [ index ])
-            | Ptr(Ptr(typ)) ->
-                let addr = Llvm.build_load addr "deref" bld in
-                (addr, typ, [], [ index ])
-            | Ptr(Array(typ, _)) ->
-                (addr, typ, [ const_zero typs ], [ index ])
-            | Ptr(typ) ->
-                (addr, typ, [], [ index ])
-            | _ -> raise_error ("Pointer or array pointer expected, found: " ^ show_typ addr_typ) access.loc
-        )
-    in
-    let (addr, data_typ, array_access, indices) = cg_array_access_rec (ctx, md, bld) (typs, env) access expr in
-    (addr, data_typ, array_access @ indices)
 
 (* Codegen Constant Expressions *)
 and cg_const_expr (ctx, md) (typs, _) expr =
@@ -408,11 +386,7 @@ and cg_implicit_cast_expr (_ctx, _md, bld) (typs, _env) cast_type (expr, expr_ty
     match (cast_type, expr_type) with
     | (Ptr(Void), Ptr(_)) ->
         (Llvm.build_pointercast expr (get_llvm_type typs cast_type) "implicit_cast" bld, cast_type)
-    | (Ptr(_), Ptr(Array(atyp, sizes))) when is_nested_ptr cast_type atyp (List.length sizes) ->
-        (Llvm.build_pointercast expr (get_llvm_type typs cast_type) "implicit_cast" bld, cast_type)
-    | (ArrayRef(ctyp, dims), Ptr(_)) when is_nested_ptr expr_type ctyp dims ->
-        (Llvm.build_pointercast expr (get_llvm_type typs cast_type) "implicit_cast" bld, cast_type)
-    | (ArrayRef(ctyp, dims), Ptr(Array(atyp, sizes))) when ctyp = atyp && dims = (List.length sizes) ->
+    | (Ptr(ctyp), Ptr(Array(atyp, _))) when ctyp = atyp ->
         (Llvm.build_pointercast expr (get_llvm_type typs cast_type) "implicit_cast" bld, cast_type)
     | _ when cast_type = expr_type ->
         (expr, expr_type)

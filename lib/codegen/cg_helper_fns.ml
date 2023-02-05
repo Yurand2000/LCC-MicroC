@@ -46,16 +46,10 @@ let rec cg_default_value typs typ =
         Llvm.const_named_struct lltype (Array.of_list fields)
     )
     | Ptr(_) -> Llvm.const_pointer_null (get_llvm_type typs typ)
-    | Array(inner_typ, sizes) ->
+    | Array(inner_typ, size) ->
         let lltype = get_llvm_type typs inner_typ in
         let llvalue = cg_default_value typs inner_typ in
-        let make_def_array size (value, typ) =
-            let array_type = Llvm.array_type typ size in
-            let array_values = List.init size (fun _ -> value) in
-            (Llvm.const_array typ (Array.of_list array_values), array_type)
-        in
-        fst (List.fold_right make_def_array sizes (llvalue, lltype))
-    | ArrayRef(_) ->
-        Llvm.const_pointer_null (get_llvm_type typs typ)
+        let array_values = List.init size (fun _ -> llvalue) in
+        Llvm.const_array lltype (Array.of_list array_values)
     | Fun(_) ->
         raise_error "No default value for function types" Location.dummy_code_pos

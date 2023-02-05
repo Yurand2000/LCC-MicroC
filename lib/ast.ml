@@ -79,8 +79,7 @@ and access_node =
   | AccVar of identifier (** Variable access *)
   | AccDeref of expr (** Pointer dereferencing ( [*p] ) *)
   | AccIndex of access * expr (** Array/Pointer indexing ( [a[e]] ) *)
-  | AccDot of access * identifier (** Struct Dot access ( [a.b] ) *)
-  | AccArrow of expr * identifier (** Struct Arrow access ( [p->b] ) *)
+  | AccStruct of access * identifier (** Struct Dot and Arrow access ( [a.b] or [p->b] ) *)
 [@@deriving show]
 
 and stmt = stmt_node annotated_node

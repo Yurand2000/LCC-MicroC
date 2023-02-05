@@ -290,15 +290,10 @@ and tc_access env access =
         | (Array(_), typ) -> raise_error (fmt "Array access index is not an integer. The index expression type is: '%s'." (show_typ typ)) (Some loc)
         | (typ, _) -> raise_error (fmt "Array access requires an array or pointer type. The expression type is: '%s'." (show_typ typ))  (Some loc)
     )
-    | AccDot(access, field) -> (
+    | AccStruct(access, field) -> (
         match tc_access env access with
         | Struct(str_id) -> search_field_in_struct env str_id field loc
         | typ -> raise_error (fmt "Dot operator requires a struct type. The expression type is: '%s'." (show_typ typ)) (Some loc)
-    )
-    | AccArrow(expr, field) -> (
-        match tc_expr env expr with
-        | Ptr(Struct(str_id)) -> search_field_in_struct env str_id field loc
-        | typ -> raise_error (fmt "Arrow operator requires a pointer to struct type. The expression type is: '%s'." (show_typ typ)) (Some loc)
     )
 and search_field_in_struct env str_id field loc =
     let fields = lookup_struct_def env str_id (Some(loc)) in
