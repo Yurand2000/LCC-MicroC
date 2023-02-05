@@ -24,6 +24,9 @@ let add_entry id def env =
         | Some(_) -> raise (DuplicateEntry id)
         | None -> ((id, def) :: hd) :: tl
 
+let add_global_entry id def env =
+    List.rev env |> add_entry id def |> List.rev
+
 let rec lookup_opt id env =
     match env with
     | [] -> None

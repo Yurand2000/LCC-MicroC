@@ -19,9 +19,13 @@ val begin_block : 'a t -> 'a t
     Closing the global scope will raise an exception. *)
 val end_block : 'a t -> 'a t
 
-(** Adds an entry to the most recent scope if there is no other
+(** Adds an entry to the most inner scope if there is no other
     definition with the same name, otherwise raises a DuplicateEntry exception *)
-val add_entry : Ast.identifier -> 'a -> 'a t -> 'a t 
+val add_entry : Ast.identifier -> 'a -> 'a t -> 'a t
+
+(** Adds an entry to the global scope if there is no other
+    definition with the same name, otherwise raises a DuplicateEntry exception *)
+val add_global_entry : Ast.identifier -> 'a -> 'a t -> 'a t 
 
 (** Lookup for definition in the symbol table, returning an option. *)
 val lookup : Ast.identifier -> 'a t -> 'a

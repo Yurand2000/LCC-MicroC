@@ -219,13 +219,13 @@ let typ :=
   | TVOID; { TypV }
   | TBOOL; { TypB }
   | STRUCT; struct_name = IDENT; { TypS struct_name }
-let adv_typ := // pointers and arrays
-  | t = adv_typ_noptr; { t }
-  | "*"; t = adv_typ; { TypP t } //Pointer of type
-let adv_typ_noptr :=
+let cast_typ := // pointers
   | t = typ; { t }
-  | "("; t = adv_typ; ")"; { t }
-  | t = adv_typ; "["; i = INT?; "]"; { TypA (t, i) } //Array of type
+  | t = cast_typ; "*"; { TypP t } //Pointer of type
+let sizeof_typ := // pointers and arrays
+  | t = typ; { t }
+  | t = sizeof_typ; "*"; { TypP t } //Pointer of type
+  | t = sizeof_typ; "["; i = INT; "]"; { TypA (t, Some(i)) } //Array of type
 
 /* ------------------------------------------ */
 /* Single Line Statement (inline), returns a node of type: stmt */
@@ -468,8 +468,8 @@ let rexpr(expr_sym) :=
     } %prec POST_INCR_DECR
 
   //SizeOf operator
-  | SIZEOF; "("; t = adv_typ; ")"; { annotate (SizeOf t) $loc }
-  | "("; t = adv_typ; ")"; expr = expr_sym; { annotate (Cast (t, expr)) $loc }
+  | SIZEOF; "("; t = sizeof_typ; ")"; { annotate (SizeOf t) $loc }
+  | "("; t = cast_typ; ")"; expr = expr_sym; { annotate (Cast (t, expr)) $loc }
 
 /* ------------------------------------------ */
 /* AExpression, returns a node of type: expr */

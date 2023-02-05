@@ -63,8 +63,10 @@ let hex_exponent =
     ( 'p' | 'P' ) sign? hex_integer
 
 let float = 
-      decimal_significand decimal_exponent? ('f' | 'F')
-    | hex_number_prefix hex_significand hex_exponent? ('f' | 'F')
+      decimal_significand decimal_exponent? 
+    | hex_number_prefix hex_significand hex_exponent?
+
+let float_end_marker = ('f' | 'F')
 
 (* Scanner specification *)
 rule next_token = parse
@@ -131,10 +133,10 @@ rule next_token = parse
 
     (* Integer and Float literals *)
     | integer as str  { INT (int_of_string str) }
-    | float as str { FLOAT (float_of_string str) }
+    | float as str float_end_marker { FLOAT (float_of_string str) }
 
     (* String literals *)
-    | '\"' (str_chars | str_special_chars)* as str '\"' { STRING str }
+    | '\"' ((str_chars | str_special_chars)* as str) '\"' { STRING str }
 
     (* Char literals *)
     | '\'' chars as str '\''

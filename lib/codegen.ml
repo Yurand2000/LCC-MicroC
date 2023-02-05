@@ -39,16 +39,16 @@ and split_topdecls topdecls =
 and cg_global_var (ctx, md) (typs, env) (typ, id, expr) =
     match expr with
     | Some(expr) -> (
-        let (expr, typ) = cg_const_expr ctx (typs, env) expr in
+        let (expr, typ) = cg_const_expr (ctx, md) (typs, env) expr in
         let var = Llvm.define_global id expr md in
-        let env = add_entry id (var, Ptr(typ)) env in
+        let env = add_global_entry id (var, Ptr(typ)) env in
         (typs, env)
     )
     | None -> (
         let typ = get_local_typ typ in
         let default = cg_default_value typs typ in
         let var = Llvm.define_global id default md in
-        let env = add_entry id (var, Ptr(typ)) env in
+        let env = add_global_entry id (var, Ptr(typ)) env in
         (typs, env)
     )
 
@@ -110,35 +110,35 @@ and cg_fun_def (ctx, md) (typs, env) { typ=_; fname=id; formals=formals; body=bo
     let env = List.fold_left2 add_local_params_to_env env formals params in
 
     (* Build function body *)
-    let _ = cg_stmt (ctx, bld) (typs, env) body in
+    let _ = cg_stmt (ctx, md, bld) (typs, env) body in
     let _ = if Bool.not (is_return_present body) then
         let _ = Llvm.build_ret_void bld in ()
     in
     ()
 
 (* Generate code for Statements *)
-and cg_stmt (ctx, bld) (typs, env) stmt =
+and cg_stmt (ctx, md, bld) (typs, env) stmt =
     match stmt.node with
     | If(guard_expr, then_stmts, else_stmts) ->
-        cg_if_stmt (ctx, bld) (typs, env) guard_expr then_stmts else_stmts
+        cg_if_stmt (ctx, md, bld) (typs, env) guard_expr then_stmts else_stmts
     | While(guard_expr, stmts) ->
-        cg_while_stmt (ctx, bld) (typs, env) guard_expr stmts
+        cg_while_stmt (ctx, md, bld) (typs, env) guard_expr stmts
     | Expr(expr) ->
-        let _ = cg_expr (ctx, bld) (typs, env) expr in ()
-    | Return(Some(expr)) -> 
-        let (expr, _) = cg_expr (ctx, bld) (typs, env) expr in
+        let _ = cg_expr (ctx, md, bld) (typs, env) expr in ()
+    | Return(Some(expr)) ->
+        let (expr, _) = cg_expr (ctx, md, bld) (typs, env) expr in
         let _ = Llvm.build_ret expr bld in ()
     | Return(None) ->
         let _ = Llvm.build_ret_void bld in ()
     | Block(stmts) ->
-        let build_stmt (ctx, bld) typs env stmt_or_decl =
-            cg_stmt_or_dec (ctx, bld) (typs, env) stmt_or_decl
+        let build_stmt (ctx, md, bld) typs env stmt_or_decl =
+            cg_stmt_or_dec (ctx, md, bld) (typs, env) stmt_or_decl
         in
-        let _ = List.fold_left (build_stmt (ctx, bld) typs) (begin_block env) stmts in
+        let _ = List.fold_left (build_stmt (ctx, md, bld) typs) (begin_block env) stmts in
         ()
 
 (* Code for Statement Or Declarations, they may update the local environment *)
-and cg_stmt_or_dec (ctx, bld) (typs, env) stmt_or_dec = 
+and cg_stmt_or_dec (ctx, md, bld) (typs, env) stmt_or_dec =
     match stmt_or_dec.node with
     | Dec(typ, id) -> (
         let typ = get_local_typ typ  in
@@ -147,11 +147,11 @@ and cg_stmt_or_dec (ctx, bld) (typs, env) stmt_or_dec =
         add_entry id (var, Ptr(typ)) env
     )
     | Stmt(stmt) ->
-        let _ = cg_stmt (ctx, bld) (typs, env) stmt in
+        let _ = cg_stmt (ctx, md, bld) (typs, env) stmt in
         env
 
 (* Code generation for If statements *)
-and cg_if_stmt (ctx, bld) (typs, env) guard then_stmt else_stmt = 
+and cg_if_stmt (ctx, md, bld) (typs, env) guard then_stmt else_stmt =
     (* Build then and else basic blocks *)
     let fn = Llvm.block_parent (Llvm.insertion_block bld) in
     let then_bb = Llvm.append_block ctx "if_then" fn in
@@ -166,18 +166,18 @@ and cg_if_stmt (ctx, bld) (typs, env) guard then_stmt else_stmt =
     in
 
     (* Evaluate guard and build branch instruction *)
-    let (guard, _) = cg_expr (ctx, bld) (typs, env) guard in
+    let (guard, _) = cg_expr (ctx, md, bld) (typs, env) guard in
     let _ = Llvm.build_cond_br guard then_bb else_bb bld in
 
     (* Build then and else branches *)
     let _ = Llvm.position_at_end then_bb bld in
-    let _ = cg_stmt (ctx, bld) (typs, env) then_stmt in
+    let _ = cg_stmt (ctx, md, bld) (typs, env) then_stmt in
     let _ = if Bool.not (is_return_present then_stmt) then
         let _ = Llvm.build_br cnt_bb bld in ()
     in
 
     let _ = Llvm.position_at_end else_bb bld in
-    let _ = cg_stmt (ctx, bld) (typs, env) else_stmt in
+    let _ = cg_stmt (ctx, md, bld) (typs, env) else_stmt in
     let _ = if Bool.not (is_return_present else_stmt) then
         let _ = Llvm.build_br cnt_bb bld in ()
     in
@@ -186,7 +186,7 @@ and cg_if_stmt (ctx, bld) (typs, env) guard then_stmt else_stmt =
     ()
 
 (* Code generation for While statements *)
-and cg_while_stmt (ctx, bld) (typs, env) guard body =
+and cg_while_stmt (ctx, md, bld) (typs, env) guard body =
     (* Build guard, loop and continue basic blocks *)
     let fn = Llvm.block_parent (Llvm.insertion_block bld) in
     let guard_bb = Llvm.append_block ctx "while_guard" fn in
@@ -198,12 +198,12 @@ and cg_while_stmt (ctx, bld) (typs, env) guard body =
 
     (* Evaluate guard and do conditional jump *)
     let _ = Llvm.position_at_end guard_bb bld in
-    let (guard, _) = cg_expr (ctx, bld) (typs, env) guard in
+    let (guard, _) = cg_expr (ctx, md, bld) (typs, env) guard in
     let _ = Llvm.build_cond_br guard loop_bb cnt_bb bld in
 
     (* Build loop branch *)
     let _ = Llvm.position_at_end loop_bb bld in
-    let _ = cg_stmt (ctx, bld) (typs, env) body in
+    let _ = cg_stmt (ctx, md, bld) (typs, env) body in
     let _ = match is_return_present body with
         | true -> ()
         | false -> let _ = Llvm.build_br guard_bb bld in ()
@@ -212,9 +212,9 @@ and cg_while_stmt (ctx, bld) (typs, env) guard body =
     (* Move builder to continue branch *)
     let _ = Llvm.position_at_end cnt_bb bld in
     ()
-    
+
 (* Check if all paths lead to a return statement *)
-and is_return_present stmt = 
+and is_return_present stmt =
     let rec is_return_in_stmt stmt =
         match stmt.node with
         | If(_, then_stmt, else_stmt) ->
@@ -238,112 +238,137 @@ and is_return_present stmt =
     is_return_in_stmt stmt
 
 (* Codegen Expressions *)
-and cg_expr (ctx, bld) (typs, env) expr =
+and cg_expr (ctx, md, bld) (typs, env) expr =
     let loc = expr.loc in
     match expr.node with
     | ILiteral(_) | FLiteral(_) | CLiteral(_)
     | BLiteral(_) | SLiteral(_) | SizeOf(_) ->
-        cg_literals ctx typs expr
-
+        cg_literals (ctx, md) typs expr
     | Access(access) -> (
-        let (addr, addr_typ) = cg_access (ctx, bld) (typs, env) access in
+        let (addr, addr_typ) = cg_access (ctx, md, bld) (typs, env) access in
         match addr_typ with
         | Ptr(Array(_)) -> (addr, addr_typ)
         | Ptr(typ) -> (Llvm.build_load addr "load" bld, typ)
         | _ -> raise_error "Access address is not a pointer" expr.loc
     )
     | Assign(access, expr) -> (
-        let (expr, expr_typ) = cg_expr (ctx, bld) (typs, env) expr in
-        let (addr, access_typ) = cg_access (ctx, bld) (typs, env) access in
+        let (expr, expr_typ) = cg_expr (ctx, md, bld) (typs, env) expr in
+        let (addr, access_typ) = cg_access (ctx, md, bld) (typs, env) access in
         let access_typ = match access_typ with
             | Ptr(typ) -> typ
             | _ -> raise_error "Access didn't return a pointer" loc
         in
-        let (expr, expr_typ) = cg_implicit_cast_expr (ctx, bld) (typs, env) access_typ (expr, expr_typ) loc in
+        let (expr, expr_typ) = cg_implicit_cast_expr (ctx, md, bld) (typs, env) access_typ (expr, expr_typ) loc in
         let _ = Llvm.build_store expr addr bld in
         (expr, expr_typ)
     )
-    | Addr(access) -> cg_access (ctx, bld) (typs, env) access
+    | Addr(access) -> cg_access (ctx, md, bld) (typs, env) access
 
-    | UnaryOp(op, expr) -> cg_un_op (ctx, bld) (typs, env) op expr loc
-    | BinaryOp(op, lexpr, rexpr) -> cg_bin_op (ctx, bld) (typs, env) op lexpr rexpr loc
+    | UnaryOp(op, expr) -> cg_un_op (ctx, md, bld) (typs, env) op expr loc
+    | BinaryOp(op, lexpr, rexpr) -> cg_bin_op (ctx, md, bld) (typs, env) op lexpr rexpr loc
     | CommaOp(lexpr, rexpr) ->
-        let _ = cg_expr (ctx, bld) (typs, env) lexpr in
-        cg_expr (ctx, bld) (typs, env) rexpr
-    | Call(id, args) -> cg_fn_call (ctx, bld) (typs, env) id args loc
-    | Cast(typ, expr) -> cg_cast_expr (ctx, bld) (typs, env) typ expr loc
+        let _ = cg_expr (ctx, md, bld) (typs, env) lexpr in
+        cg_expr (ctx, md, bld) (typs, env) rexpr
+    | Call(id, args) -> cg_fn_call (ctx, md, bld) (typs, env) id args loc
+    | Cast(typ, expr) -> cg_cast_expr (ctx, md, bld) (typs, env) typ expr loc
 
 (* Access Expressions, returns address of the access expression *)
-and cg_access (ctx, bld) (typs, env) access = 
+and cg_access (ctx, md, bld) (typs, env) access =
     match access.node with
     | AccVar(id) -> lookup id env
-    | AccDeref(expr) -> cg_expr (ctx, bld) (typs, env) expr
+    | AccDeref(expr) -> cg_expr (ctx, md, bld) (typs, env) expr
     | AccIndex(access, expr) -> (
-        let (addr, data_typ, indices) = cg_array_access (ctx, bld) (typs, env) access expr in
-        (Llvm.build_gep addr (Array.of_list (const_zero typs :: indices)) "array_access" bld, Ptr(data_typ))
+        let (addr, data_typ, indices) = cg_array_access (ctx, md, bld) (typs, env) access expr in
+        (Llvm.build_gep addr (Array.of_list indices) "array_access" bld, Ptr(data_typ))
     )
     | AccDot(access, field_id) -> (
-        let (addr, addr_typ) = cg_access (ctx, bld) (typs, env) access in
+        let (addr, addr_typ) = cg_access (ctx, md, bld) (typs, env) access in
         match addr_typ with
-        | Ptr(Struct(struct_id)) -> cg_struct_access (ctx, bld) typs addr struct_id field_id
+        | Ptr(Struct(struct_id)) -> cg_struct_access (ctx, md, bld) typs addr struct_id field_id
         | _ -> raise_error "Access address is not a pointer to struct" access.loc
     )
     | AccArrow(expr, field_id) -> (
-        let (addr, addr_typ) = cg_expr (ctx, bld) (typs, env) expr in
+        let (addr, addr_typ) = cg_expr (ctx, md, bld) (typs, env) expr in
         match addr_typ with
-        | Ptr(Struct(struct_id)) -> cg_struct_access (ctx, bld) typs addr struct_id field_id
+        | Ptr(Struct(struct_id)) -> cg_struct_access (ctx, md, bld) typs addr struct_id field_id
         | _ -> raise_error "Access address is not a pointer to struct" access.loc
     )
-and cg_struct_access (_ctx, bld) typs addr struct_id field_id =
+and cg_struct_access (_ctx, _md, bld) typs addr struct_id field_id =
     let (field_index, field_typ) = lookup_struct_field struct_id field_id typs in
     let addr = Llvm.build_struct_gep addr field_index "struct_access" bld in
     (addr, Ptr(field_typ))
-and cg_array_access (ctx, bld) (typs, env) access expr =
-    let (index, _) = cg_expr (ctx, bld) (typs, env) expr in
-    match access.node with
-    | AccIndex(access, expr) -> (
-        let (addr, data_typ, indices) = cg_array_access (ctx, bld) (typs, env) access expr in
-        (addr, data_typ, index :: indices)
-    )
-    | _ -> (
-        let (addr, addr_typ) = (cg_access (ctx, bld) (typs, env) access) in
-        match addr_typ with
-        | Ptr(Array(typ, _)) -> (addr, typ, [ index ])
-        | Ptr(ArrayRef(typ, _)) -> (
-            let addr = Llvm.build_load addr "deref" bld in
-            (addr, typ, [ index ])
+and cg_array_access (ctx, md, bld) (typs, env) access expr =
+    let rec cg_array_access_rec (ctx, md, bld) (typs, env) access expr =
+        let (index, _) = cg_expr (ctx, md, bld) (typs, env) expr in
+        match access.node with
+        | AccIndex(access, expr) -> (
+            let (addr, data_typ, array_access, indices) = cg_array_access_rec (ctx, md, bld) (typs, env) access expr in
+            (addr, data_typ, array_access, index :: indices)
         )
-        | Ptr(typ) -> (addr, typ, [ index ])
-        | _ -> raise_error ("Array pointer expected, found: " ^ show_typ addr_typ) access.loc
-    )
+        | _ -> (
+            let (addr, addr_typ) = (cg_access (ctx, md, bld) (typs, env) access) in
+            match addr_typ with
+            | Ptr(ArrayRef(typ, _)) ->
+                let addr = Llvm.build_load addr "deref" bld in
+                (addr, typ, [ const_zero typs ], [ index ])
+            | Ptr(Ptr(typ)) ->
+                let addr = Llvm.build_load addr "deref" bld in
+                (addr, typ, [], [ index ])
+            | Ptr(Array(typ, _)) ->
+                (addr, typ, [ const_zero typs ], [ index ])
+            | Ptr(typ) ->
+                (addr, typ, [], [ index ])
+            | _ -> raise_error ("Pointer or array pointer expected, found: " ^ show_typ addr_typ) access.loc
+        )
+    in
+    let (addr, data_typ, array_access, indices) = cg_array_access_rec (ctx, md, bld) (typs, env) access expr in
+    (addr, data_typ, array_access @ indices)
 
 (* Codegen Constant Expressions *)
-and cg_const_expr ctx (typs, _) expr =
+and cg_const_expr (ctx, md) (typs, _) expr =
     match expr.node with
     | ILiteral(_) | FLiteral(_) | CLiteral(_)
     | BLiteral(_) | SLiteral(_) | SizeOf(_) ->
-        cg_literals ctx typs expr
+        cg_literals (ctx, md) typs expr
     | Access(_) | Addr(_) | Assign(_, _) | Call(_, _) | Cast(_, _) ->
         raise_error "This expression cannot be const evaluated" expr.loc
     | UnaryOp(_, _) | BinaryOp(_, _, _) | CommaOp(_, _) ->
         raise_error "This expression must be const evaluated before code generation" expr.loc
 
 (* Literal Expressions *)
-and cg_literals ctx typs expr =
+and cg_literals (ctx, md) typs expr =
     match expr.node with
     | ILiteral(value) -> (Llvm.const_int (get_llvm_int typs) value, Int)
     | FLiteral(value) -> (Llvm.const_float (get_llvm_float typs) value, Float)
     | CLiteral(value) -> (Llvm.const_int (get_llvm_char typs) (Char.code value), Char)
     | BLiteral(value) -> (Llvm.const_int (get_llvm_bool typs) (Bool.to_int value), Bool)
-    | SLiteral(value) -> (Llvm.const_stringz ctx value, Ptr Char)
+    | SLiteral(value) -> make_string_literal (ctx, md) typs value
     | SizeOf(typ) ->
         let lltype = get_llvm_type typs (get_local_typ typ) in
         (get_size_of_type typs lltype, Int)
     | _ ->
         raise_error "Literal evaluation unexpected error" expr.loc
 
+(* String literals are saved as constant global variables with special names,
+   and a pointer to these variables is returned.
+   This function allocates only one variable for each same string literal generated. *)
+and make_string_literal (ctx, md) typs string_literal =
+    let global_const_name = "0SL[" ^ Int.to_string (Hashtbl.hash string_literal) ^ "]" in
+    let gvar =
+        match Llvm.lookup_global global_const_name md with
+        | Some(gvar) -> gvar
+        | None -> (
+            let string_literal = Llvm.const_stringz ctx string_literal in
+            let gvar = Llvm.define_global global_const_name string_literal md in
+            let _ = Llvm.set_global_constant true gvar in
+            gvar
+        )
+    in
+    let string_pointer = Llvm.const_gep gvar [|const_zero typs; const_zero typs|] in
+    (string_pointer, Ptr Char)
+
 (* Codegen Function call Expressions *)
-and cg_fn_call (ctx, bld) (typs, env) id args loc =
+and cg_fn_call (ctx, md, bld) (typs, env) id args loc =
     let (fn, fun_typ) = lookup id env in
     let (ret_typ, arg_typs) =
         match fun_typ with
@@ -351,17 +376,17 @@ and cg_fn_call (ctx, bld) (typs, env) id args loc =
         | _ -> raise_error "The type of the given function is not a function" loc
     in
     let args_implicit_cast (llvalue, expr_type) arg_type =
-        fst (cg_implicit_cast_expr (ctx, bld) (typs, env) arg_type (llvalue, expr_type) loc)
+        fst (cg_implicit_cast_expr (ctx, md, bld) (typs, env) arg_type (llvalue, expr_type) loc)
     in
-    let args = List.map (cg_expr (ctx, bld) (typs, env)) args in
+    let args = List.map (cg_expr (ctx, md, bld) (typs, env)) args in
     let args = List.map2 args_implicit_cast args arg_typs in
     match ret_typ with
     | Void -> (Llvm.build_call fn (Array.of_list args) "" bld, ret_typ)
     | _ -> (Llvm.build_call fn (Array.of_list args) "fn_call" bld, ret_typ)
 
 (* Codegen Cast expression *)
-and cg_cast_expr (ctx, bld) (typs, env) _cast_type _expr loc =
-    let (expr, expr_type) = cg_expr (ctx, bld) (typs, env) _expr in
+and cg_cast_expr (ctx, md, bld) (typs, env) _cast_type _expr loc =
+    let (expr, expr_type) = cg_expr (ctx, md, bld) (typs, env) _expr in
     let cast_type = get_local_typ _cast_type in
     match (cast_type, expr_type) with
     | (Int, Float) ->
@@ -376,19 +401,10 @@ and cg_cast_expr (ctx, bld) (typs, env) _cast_type _expr loc =
         (Llvm.build_pointercast expr (get_llvm_type typs cast_type) "cast" bld, cast_type)
 
     (* Implicit casts *)
-    | (Ptr(Void), Ptr(_)) ->
-        cg_implicit_cast_expr (ctx, bld) (typs, env) cast_type (expr, expr_type) loc
-    | (Ptr(ctyp), Ptr(Array(atyp, _))) when ctyp = atyp ->
-        cg_implicit_cast_expr (ctx, bld) (typs, env) cast_type (expr, expr_type) loc
-    | (Ptr(Array(ctyp, _)), Ptr(atyp)) when ctyp = atyp ->
-        cg_implicit_cast_expr (ctx, bld) (typs, env) cast_type (expr, expr_type) loc
-    | _ when cast_type = expr_type ->
-        cg_implicit_cast_expr (ctx, bld) (typs, env) cast_type (expr, expr_type) loc
-    | _ ->
-        raise_error ("Unexpected cast operation: " ^ show_typ expr_type ^ " to " ^ show_typ cast_type) loc
+    | _ -> cg_implicit_cast_expr (ctx, md, bld) (typs, env) cast_type (expr, expr_type) loc
 
 (* Codegen implicit cast *)
-and cg_implicit_cast_expr (_ctx, bld) (typs, _env) cast_type (expr, expr_type) loc =
+and cg_implicit_cast_expr (_ctx, _md, bld) (typs, _env) cast_type (expr, expr_type) loc =
     match (cast_type, expr_type) with
     | (Ptr(Void), Ptr(_)) ->
         (Llvm.build_pointercast expr (get_llvm_type typs cast_type) "implicit_cast" bld, cast_type)
@@ -404,8 +420,8 @@ and cg_implicit_cast_expr (_ctx, bld) (typs, _env) cast_type (expr, expr_type) l
         raise_error ("Unexpected implicit cast operation: " ^ show_typ expr_type ^ " to " ^ show_typ cast_type) loc
 
 (* Codegen Unary Operator Expressions *)
-and cg_un_op (ctx, bld) (typs, env) op expr loc =  
-    let (expr, typ) = cg_expr (ctx, bld) (typs, env) expr in
+and cg_un_op (ctx, md, bld) (typs, env) op expr loc =
+    let (expr, typ) = cg_expr (ctx, md, bld) (typs, env) expr in
     match op with
     | Pos -> (expr, typ)
     | Neg -> (
@@ -421,9 +437,9 @@ and cg_un_op (ctx, bld) (typs, env) op expr loc =
     )
 
 (* Codegen Binary Operator Expressions *)
-and cg_bin_op (ctx, bld) (typs, env) op lexpr rexpr loc = 
-    let (lexpr, ltype) = cg_expr (ctx, bld) (typs, env) lexpr in
-    let (rexpr, rtype) = cg_expr (ctx, bld) (typs, env) rexpr in
+and cg_bin_op (ctx, md, bld) (typs, env) op lexpr rexpr loc =
+    let (lexpr, ltype) = cg_expr (ctx, md, bld) (typs, env) lexpr in
+    let (rexpr, rtype) = cg_expr (ctx, md, bld) (typs, env) rexpr in
     match op with
     | Add -> (
         match (ltype, rtype) with
