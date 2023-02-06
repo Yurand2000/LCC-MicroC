@@ -14,9 +14,22 @@ type returns = | Returns | NoReturn
 (* ************************************************* *)
 (* Type Check whole program declaration: Ast.program *)
 let rec type_check program =
-    let env = tc_program program in
-    tc_main_defined program env |>
-    solve_const_expressions
+    let _ = tc_program program in
+    solve_const_expressions program
+
+(* Type Check if there is a valid main function defined: Ast.program *)
+and type_check_main_defined program =
+    let get_function_definitions env topdecl =
+        match topdecl.node with
+        | Fundecl({typ=ret_typ; fname=id; formals=formals; body=_}) ->
+            tc_func_decl env (id, ret_typ, formals) topdecl.loc
+        | Vardec(_) | StructDecl(_) ->
+            env
+    in
+    let decls = match program with | Prog(decls) -> decls in
+    make_default_env empty_table |>
+    fun env -> List.fold_left get_function_definitions env decls |>
+    tc_main_defined program
 
 (* Check if a correctly defined main function is available. *)
 and tc_main_defined program env =
