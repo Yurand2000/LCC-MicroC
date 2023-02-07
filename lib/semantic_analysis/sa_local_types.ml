@@ -1,11 +1,5 @@
-exception Semantic_error of Location.code_pos * string
-
 open Ast
 open Symbol_table
-
-(* Helper exception function *)
-let raise_error msg loc =
-    raise (Semantic_error(Option.value loc ~default:Location.dummy_code_pos, msg))
 
 (* Local types used for Semantic Analysis *)
 type typ =

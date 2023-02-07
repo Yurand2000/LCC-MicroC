@@ -3,9 +3,10 @@ open Symbol_table
 open Cg_local_types
 open Cg_environment
 open Cg_helper_fns
+open Cg_exceptions
 
 (* Exceptions *)
-exception Unexpected_error of Location.code_pos * string
+exception Unexpected_error = Cg_exceptions.Unexpected_error
 
 (* Main Function *)
 let rec to_llvm_module ast =
@@ -22,7 +23,8 @@ let rec to_llvm_module ast =
         let _ = List.map (cg_struct_def (ctx, md) env) structs in
         let env = List.fold_left (cg_fun_decl (ctx, md)) env functs in
         let env = List.fold_left (cg_global_var (ctx, md)) env vars in
-        List.map (cg_fun_def (ctx, md) env) functs
+        List.filter (fun { typ=_; fname=_; formals=_; body=body; } -> Option.is_some body ) functs |>
+        List.map (cg_fun_def (ctx, md) env)
     ) in
     md
 
@@ -73,17 +75,24 @@ and cg_struct_def (_ctx, _md) (typs, _env) (id, fields) =
     ()
 
 (* Generate code for Function declaration *)
-and cg_fun_decl (_ctx, md) (typs, env) { typ=ret_typ; fname=fn_name; formals=formals; body=_; } =
+and cg_fun_decl (_ctx, md) (typs, env) { typ=ret_typ; fname=fn_name; formals=formals; body=body; } =
     (* Convert Ast types to local types *)
     let ret_typ = get_local_typ ret_typ in
     let formals = List.map (fun (t, _) -> get_local_typ t) formals in
     let fn_type = Fun (ret_typ, formals) in
 
     (* Add function to the environment *)
-    (typs, define_llvm_fn (_ctx, md) (typs, env) fn_name fn_type)
+    match body with
+    | Some(_) -> (typs, define_llvm_fn (_ctx, md) (typs, env) fn_name fn_type)
+    | None -> (typs, declare_llvm_fn (_ctx, md) (typs, env) fn_name fn_type)
 
 (* Generate code for Function definition *)
 and cg_fun_def (ctx, md) (typs, env) { typ=_; fname=id; formals=formals; body=body; } =
+    let body = match body with
+    | Some(body) -> body
+    | None -> raise_error "Cannot create body of an external function declaration" Location.dummy_code_pos
+    in
+
     (* Convert Ast types to local types *)
     let formals = List.map (fun (t, id) -> (get_local_typ t, id)) formals in
 

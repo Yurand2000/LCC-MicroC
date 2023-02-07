@@ -1,5 +1,6 @@
 open Symbol_table
 open Sa_local_types
+open Sa_exceptions
 
 (* Type of data used in the environment table. *)
 type symbol =

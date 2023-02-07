@@ -1,5 +1,6 @@
 open Symbol_table
 open Cg_local_types
+open Cg_exceptions
 
 (* Constants *)
 let const_zero typs = Llvm.const_int (get_llvm_int typs) 0

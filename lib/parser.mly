@@ -205,8 +205,13 @@ let fundecl :=
   | ret_typ = typ; fname = var_declarator; "("; args = separated_list(COMMA, funarg); ")"; body = block;
     {
       let (ret_typ, fname) = to_typ_id ret_typ fname in
-      { typ = ret_typ; fname = fname; formals = args; body = body; }
+      { typ = ret_typ; fname = fname; formals = args; body = Some(body); }
     }
+  | ret_typ = typ; fname = var_declarator; "("; args = separated_list(COMMA, funarg); ")"; SEMICOLON;
+    {
+      let (ret_typ, fname) = to_typ_id ret_typ fname in
+      { typ = ret_typ; fname = fname; formals = args; body = None; }
+    } 
 let funarg := // returns: typ * identifier
   | typ = typ; desc = var_declarator; { to_typ_id typ desc }
 
@@ -228,7 +233,7 @@ let sizeof_typ := // pointers and arrays
   | t = sizeof_typ; "["; i = INT; "]"; { TypA (t, Some(i)) } //Array of type
 
 /* ------------------------------------------ */
-/* Single Line Statement (inline), returns a node of type: stmt */
+/* Single Line Statement, returns a node of type: stmt */
 /* These are the statements that can be used inside if, while and for bodies without opening a scope. */
 let single_line_stmt :=
   | RETURN; e = expr?; SEMICOLON; { annotate (Return e) $loc } //Return expression

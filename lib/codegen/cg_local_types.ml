@@ -1,10 +1,5 @@
-exception Unexpected_error of Location.code_pos * string
-
 open Ast
 open Symbol_table
-
-(* Helper exception function *)
-let raise_error msg loc = raise (Unexpected_error (loc, "Semantic Analysis should have failed at this point: " ^ msg))
 
 (* Local types used for code generation *)
 type typ =

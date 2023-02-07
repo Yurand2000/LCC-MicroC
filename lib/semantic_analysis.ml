@@ -1,10 +1,11 @@
-exception Semantic_error of Location.code_pos * string
+exception Semantic_error = Sa_exceptions.Semantic_error
 
 open Ast
 open Symbol_table
 open Sa_local_types
 open Sa_environment
 open Sa_const_expr_solver
+open Sa_exceptions
 
 let fmt = Printf.sprintf
 
@@ -139,7 +140,9 @@ and tc_func_body env (id, body) loc =
 
 and process_function_bodies env defs =
     let process_function env ({typ=_; fname=id; formals=_; body=body}, loc) =
-        tc_func_body env (id, body) loc
+        match body with
+        | Some(body) -> tc_func_body env (id, body) loc
+        | None -> ()
     in
     List.iter (process_function env) defs
 

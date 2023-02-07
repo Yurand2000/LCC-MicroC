@@ -33,7 +33,7 @@ and solve_global_variable typ id expr =
     Vardec (typ, id, Option.map solve_expr expr)
 
 and solve_function_definition { typ=typ; fname=fname; formals=formals; body=body; } =
-    Fundecl { typ=typ; fname=fname; formals=formals; body=solve_stmt body; }
+    Fundecl { typ=typ; fname=fname; formals=formals; body=Option.map solve_stmt body; }
 
 and solve_stmt stmt =
     let loc = stmt.loc in

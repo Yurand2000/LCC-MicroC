@@ -106,7 +106,7 @@ type fun_decl = {
   typ : typ;
   fname : string;
   formals : (typ * identifier) list;
-  body : stmt;
+  body : stmt option;
 }
 [@@deriving show]
 
