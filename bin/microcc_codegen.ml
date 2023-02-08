@@ -23,7 +23,8 @@ and compile_file ast optimize verify_module =
     optimize llmodule
 
 (* Compile a set of files into a list of Llvm.llmodule(s) *)
-and compile_files files optimize verify_module =
+and compile_files files tc_main_defined optimize verify_module =
+    (* Parse and type check each input file *)
     let parse_and_type_check filename =
         try
             let ast = make_buffer filename |> parse |> type_check in
@@ -34,12 +35,20 @@ and compile_files files optimize verify_module =
         | Semantic_analysis.Semantic_error (pos, msg) ->
             handle_semantic_error filename pos msg; failwith ""
     in
+    let asts = List.map parse_and_type_check files in
+
+    (* Optionally check if the main function is defined in at least one file *)
     let is_main_defined is_defined (_, ast) =
         try
             let _ = is_main_defined ast in true
         with Semantic_analysis.Semantic_error (_) ->
             is_defined || false
     in
+    let main_defined = List.fold_left is_main_defined (Bool.not tc_main_defined) asts in
+    if Bool.not main_defined then
+        failwith "Main function not defined or not correctly defined.";
+
+    (* Generate the llvm modules *)
     let compile (filename, ast) =
         try
             (filename, compile_file ast optimize verify_module)
@@ -47,15 +56,14 @@ and compile_files files optimize verify_module =
         | Codegen.Unexpected_error (pos, msg) ->
             handle_codegen_error filename pos msg; failwith ""
     in
-    let asts = List.map parse_and_type_check files in
-    let main_defined = List.fold_left is_main_defined false asts in
-    if Bool.not main_defined then
-        failwith "Main function not defined or not correctly defined.";
     List.map compile asts
 
 (* Generate object files for the current architecture *)
 and make_output_files llmodules output_dir =
+    (* Initialize all backends for code generation *)
     Llvm_all_backends.initialize ();
+
+    (* Obtain the generator and the data layout for the current machine *)
     let machine_target_triple = Llvm_target.Target.default_triple () in
     let machine_target = Llvm_target.Target.by_triple machine_target_triple in
     let generator =
@@ -64,8 +72,12 @@ and make_output_files llmodules output_dir =
         ~cpu:"generic"
         machine_target
     in
-    let data_layout = Llvm_target.TargetMachine.data_layout generator in
-    let data_layout = Llvm_target.DataLayout.as_string data_layout in
+    let data_layout =
+        Llvm_target.TargetMachine.data_layout generator |>
+        Llvm_target.DataLayout.as_string
+    in
+
+    (* Set the data layout to the modules and generate the object files *)
     let set_data_layouts (_, llmodule) = 
         Llvm.set_data_layout data_layout llmodule;
         Llvm.set_target_triple machine_target_triple llmodule;

@@ -38,13 +38,13 @@ let () =
                 ( "-verify", Arg.Set verify,
                     "Verify the generated LLVM module (default: false)" );
                 ( "-no_tc_main", Arg.Unit (fun () -> tc_main_defined := false),
-                    "Skip control for definition of the main function. Only works for single step compilation, if compiling a main function is necessary. (default: true)" );
+                    "Skip control for definition of the main function. Only used for single step compilation. (default: true)" );
             ]
         in
         let usage =
             Printf.sprintf "Usage:\t%s%s%s" Sys.argv.(0)
             "\n **   Debug mode: [-s | -p | -t | -d | -g <output>] [-no_tc_main] [-O] [-verify] <file1>"
-            "\n ** Compile mode: [-dir <output_directory>] [-rt <runtime_support>] [-o <output>] [-O] [-verify] <file1> [<file2>] ... \n" 
+            "\n ** Compile mode: [-dir <output_directory>] [-rt <runtime_support>] [-o <output>] [-O] [-verify] <file1> [<file2>] ... \n"
         in
         let anon_files filename = input_files := filename :: !input_files in
         let () = Arg.parse spec_list anon_files usage in
@@ -56,10 +56,10 @@ let () =
                 try
                     let output_file =
                         match !output_file with
-                        |    "" -> "a.out"
+                        | "" -> "a.out"
                         | _ -> !output_file
                     in
-                    let llmodules = compile_files !input_files !optimize !verify in
+                    let llmodules = compile_files !input_files !link !optimize !verify in
                     let object_files = make_output_files llmodules !output_dir in
                     if !link then
                         try_linking object_files !rt_support output_file;

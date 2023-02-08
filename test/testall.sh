@@ -22,21 +22,29 @@ clang -c "$RTIN" -o "$RTOUT"
 # Compile and check each file with its expected output
 for file in $2*; do
     if [[ "$file" == */test-*.mc ]]; then
-        echo -ne "                                             \r";
-        echo -ne "Compiling $file \r";
+        echo -ne "                                                              \r";
+        echo -ne "Compiling \"$file\" \r";
         if "$1" -dir "$3" -rt "$RTOUT" -o "$3/a.out" -O "$file" -verify; then
             FILE="${file%.*}.out"
             if [[ -f "$FILE" ]]; then
-                echo -ne "                                             \r";
-                echo -ne "Testing $file\r";
+                echo -ne "                                                              \r";
+                echo -ne "Testing \"$file\"\r";
                 "$3/a.out" | diff - "${file%.*}.out";
             else
-                echo "Output file for test \"$file\" not found...";
+                echo "Output file for test \"$file\" not found. ";
             fi
         else
             echo "File \"$file\" failed to compile. "
         fi
+    elif [[ "$file" == */fail-*.mc ]]; then
+        echo -ne "                                                              \r";
+        echo -ne "Validating that \"$file\" has an error \r";
+        if "$1" -dir "$3" -o "$3/a.out" "$file" -verify &> /dev/zero; then
+            echo "File \"$file\" should have failed compilation. "
+        fi
+    elif [[ "$file" == *.mc ]]; then
+            echo "Unknown operations to do with \"$file\". "
     fi
 done
 
-echo -ne "                                             \r";
+echo -ne "                                                              \r";
